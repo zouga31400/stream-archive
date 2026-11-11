@@ -88,7 +88,12 @@ def decode(path):
     on a library whose versions do not always match)."""
     import numpy as np
 
-    raw = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", path,
+    try:  # ffmpeg shipped as a Python package (no apt-get needed)
+        from imageio_ffmpeg import get_ffmpeg_exe
+        ffmpeg = get_ffmpeg_exe()
+    except ImportError:
+        ffmpeg = "ffmpeg"
+    raw = subprocess.run([ffmpeg, "-nostdin", "-loglevel", "error", "-i", path,
                           "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
                          capture_output=True, check=True).stdout
     return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
