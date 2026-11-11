@@ -54,7 +54,7 @@ EMAIL_ONLY = []  # private lines sent by email only (never to the public log or 
 FEED_NAME = "feed.xml"
 SHOW_END_POLL_SECONDS = 45  # how often the end-of-show signal is checked
 # Older name formats ("<word> 2026-11-10 2100-0200.mp3", "... 21h00-02h00.mp3") and
-# current names with another prefix are renamed to "<prefix> 10/11/26 21:00-02:00.mp3",
+# current names with another prefix are renamed to "<prefix> 10/11/26 18:00-23:30.mp3",
 # the prefix being the PODCAST_TITLE secret (default: Recording).
 OLD_NAME = re.compile(r"^\w+ (\d{4})-(\d{2})-(\d{2}) (\d{2})h?(\d{2})-(\d{2})h?(\d{2})(\.mp3|\.m4a)$")
 CURRENT_NAME = re.compile(r"^(.+) (\d{2})/(\d{2})/(\d{2}) (\d{2}):(\d{2})-(\d{2}):(\d{2})(\.mp3|\.m4a)$")
@@ -781,7 +781,7 @@ def main():
         else:
             log("End of show outside the recording, file not cut")
 
-    # Name on Drive and in the podcast, e.g. "<prefix> 25/12/26 21:00-00:40.mp3".
+    # Name on Drive and in the podcast, e.g. "<prefix> 25/12/26 18:00-23:30.mp3".
     # The local file keeps a plain name, since "/" cannot be used in a file path.
     name = f"{name_prefix()} {start:%d/%m/%y} {start:%H:%M}-{finish:%H:%M}{fmt['out']}"
     size_mb = os.path.getsize(output) / 1_000_000

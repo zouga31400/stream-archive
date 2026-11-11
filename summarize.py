@@ -26,7 +26,7 @@ SYSTEM = """You summarize the transcript of one evening of an audio programme \
 Write in the same language as the transcript, as plain text without markdown.
 Start with two or three sentences giving the gist of the evening. Then list the
 topics, guests and notable moments in order, one per line starting with "- " and
-the approximate time in brackets taken from the transcript, e.g. "- [21:40] ...".
+the approximate time in brackets taken from the transcript, e.g. "- [18:40] ...".
 Stay factual: only report what is said in the transcript, and when a passage is
 unclear, say so briefly rather than guessing. Keep the whole summary under 2500
 characters."""
@@ -50,7 +50,7 @@ def minutes(duration):
 
 
 def recording_start(name):
-    """Start time from a name like '<prefix> 25/12/26 21:00-00:40.mp3', or None."""
+    """Start time from a name like '<prefix> 25/12/26 18:00-23:30.mp3', or None."""
     m = CURRENT_NAME.match(name)
     if not m:
         return None
