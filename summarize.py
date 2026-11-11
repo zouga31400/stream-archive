@@ -263,8 +263,10 @@ if __name__ == "__main__":
         push(f"Summary failed: Claude API error (HTTP {e.status_code})",
              title="Summary FAILED", priority="high", tags="warning")
         sys.exit(1)
-    except (anthropic.APIError, RuntimeError, requests.RequestException) as e:
+    except Exception as e:  # any other failure: short message, and a notification
         detail = str(e) if isinstance(e, RuntimeError) else type(e).__name__
         log(f"Failed: {detail}")
         push(f"Summary failed: {detail}", title="Summary FAILED", priority="high", tags="warning")
-        sys.exit(1)
+        if isinstance(e, (RuntimeError, requests.RequestException, anthropic.APIError)):
+            sys.exit(1)  # no traceback: network errors carry addresses (Drive links)
+        raise  # code errors: the traceback only shows file names and lines

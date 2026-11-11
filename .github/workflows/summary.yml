@@ -37,6 +37,10 @@ jobs:
       SUMMARY_FILE_ID: ${{ github.event.inputs.file_id }}
     steps:
       - uses: actions/checkout@v5
+      # A Python version for which Whisper's and llama.cpp's packages are published.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install tools
         # llama-cpp-python is built from source here (a few minutes); only needed for
         # the local summary engine.
