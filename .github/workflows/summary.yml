@@ -1,0 +1,42 @@
+name: Summary
+# After each recording: transcribe the newest recording with Whisper on the runner,
+# summarize it with Claude, and put the summary in the podcast feed and on ntfy.
+on:
+  workflow_run:
+    workflows: ["Recording"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      file_id:
+        description: "Drive file id to summarize (empty = newest recording without a summary)"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: summary
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TRANSCRIPT_LANGUAGE: ${{ secrets.TRANSCRIPT_LANGUAGE }}
+      RECORD_TZ: ${{ secrets.RECORD_TZ }}
+      DRIVE_FOLDER: ${{ secrets.DRIVE_FOLDER }}
+      PODCAST_TITLE: ${{ secrets.PODCAST_TITLE }}
+      GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      SUMMARY_FILE_ID: ${{ github.event.inputs.file_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install tools
+        run: pip install faster-whisper anthropic requests
+      - name: Transcribe and summarize
+        run: python summarize.py

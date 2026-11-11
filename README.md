@@ -24,6 +24,8 @@ format is re-encoded to MP3 at `bitrate_kbps`. Recordings older than
 | `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN` | Google access, see below |
 | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `REPORT_TO` | optional email report |
 | `NTFY_TOPIC` | optional ntfy notifications |
+| `ANTHROPIC_API_KEY` | optional, Claude API key for the summaries |
+| `TRANSCRIPT_LANGUAGE` | optional, language code of the recordings (default: detected) |
 | `SHOW_END_TOPIC` | optional ntfy topic carrying the end-of-show signal (default: `NTFY_TOPIC`) |
 
 ## Starting the recording
@@ -91,6 +93,17 @@ after every upload (deleted recordings leave the feed too). The feed address is
 sent **by email only**: add it to a podcast app (e.g. Overcast > "Add URL") and
 never publish it, since anyone with it can listen. `PODCAST_TITLE` sets the
 feed title.
+
+## Summaries (optional)
+
+After each recording, the `Summary` workflow downloads the newest recording that
+has no summary yet (at least `summary_min_minutes` long), transcribes its speech
+with Whisper on the runner (`whisper_model`, music is skipped), and has Claude
+(Sonnet 5.5) write a summary with approximate times. The summary becomes the
+episode description in the podcast feed and is pushed to ntfy. Transcripts and
+summaries never appear in the public log. Needs the `ANTHROPIC_API_KEY` secret;
+a specific recording can be summarized by hand (Actions > "Summary" > "Run
+workflow" with its Drive file id).
 
 ## Troubleshooting
 

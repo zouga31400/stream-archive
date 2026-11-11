@@ -409,6 +409,17 @@ def cut(path, position):
     os.replace(tmp, path)
 
 
+def show_notes(text):
+    """Episode description for podcast apps: plain text plus an HTML version."""
+    if not text:
+        return ""
+    paragraphs = [escape(p).replace("\n", "<br/>") for p in text.strip().split("\n\n")]
+    html = "".join(f"<p>{p}</p>" for p in paragraphs).replace("]]>", "]]&gt;")
+    return (f"<description>{escape(text.strip())}</description>"
+            f"<itunes:summary>{escape(text.strip())}</itunes:summary>"
+            f"<content:encoded><![CDATA[{html}]]></content:encoded>")
+
+
 def download_url(file_id):
     """Direct download link of a Drive file shared with anyone (works for large files)."""
     return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
@@ -538,7 +549,8 @@ class Drive:
         files, page = [], None
         while True:
             params = {"q": q, "pageSize": 100, "orderBy": "createdTime desc",
-                      "fields": "nextPageToken, files(id, name, size, mimeType, createdTime, appProperties)"}
+                      "fields": "nextPageToken, files(id, name, size, mimeType, createdTime, "
+                                "description, appProperties)"}
             if page:
                 params["pageToken"] = page
             r = requests.get(DRIVE_FILES, params=params, headers=self.headers(), timeout=30)
@@ -585,9 +597,11 @@ class Drive:
                 f"<enclosure url=\"{escape(download_url(f['id']))}\" length=\"{f.get('size', 0)}\" "
                 f"type=\"{escape(f.get('mimeType', 'audio/mpeg'))}\"/>"
                 + (f"<itunes:duration>{escape(duration)}</itunes:duration>" if duration else "")
+                + show_notes(f.get("description", ""))
                 + "</item>")
         xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
-               '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">'
+               '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" '
+               'xmlns:content="http://purl.org/rss/1.0/modules/content/">'
                f"<channel><title>{escape(title)}</title><description>{escape(title)}</description>"
                "<link>https://drive.google.com/</link><itunes:block>Yes</itunes:block>"
                f"{''.join(items)}</channel></rss>\n").encode("utf-8")
@@ -613,6 +627,21 @@ class Drive:
             feed_id = r.json()["id"]
             self.share(feed_id)
         return download_url(feed_id), len(items)
+
+    def download(self, file_id, path):
+        """Downloads a Drive file created by this script."""
+        with requests.get(f"{DRIVE_FILES}/{file_id}", params={"alt": "media"},
+                          headers=self.headers(), stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with open(path, "wb") as f:
+                for chunk in r.iter_content(CHUNK):
+                    f.write(chunk)
+
+    def set_description(self, file_id, text):
+        """Stores the episode summary in the Drive file's description (used by the feed)."""
+        r = requests.patch(f"{DRIVE_FILES}/{file_id}", json={"description": text},
+                           headers=self.headers(), timeout=30)
+        r.raise_for_status()
 
     def upload(self, path, name, folder_id, properties=None, mime="audio/mpeg"):
         size = os.path.getsize(path)

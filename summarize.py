@@ -1,0 +1,182 @@
+"""Transcribes the latest recording with Whisper (on the runner) and has Claude
+summarize it. The summary becomes the episode description in the podcast feed and
+is pushed to ntfy. Transcripts and summaries never appear in the public log.
+
+GitHub secrets used (besides the Drive ones of record.py):
+  ANTHROPIC_API_KEY     Claude API key
+  TRANSCRIPT_LANGUAGE   optional: language code of the recordings, e.g. en (default: detected)
+Settings (settings.txt): whisper_model, whisper_beam_size, summary_min_minutes,
+transcription_max_minutes.
+"""
+import os
+import sys
+import time
+from datetime import datetime, timedelta
+
+import anthropic
+import requests
+
+import record
+from record import CURRENT_NAME, TZ, Drive, load_config, name_prefix, push
+
+WORK_DIR = os.path.join(record.HERE, "summary")
+MODEL = "claude-sonnet-5-5"
+SYSTEM = """You summarize the transcript of one evening of an audio programme \
+(talk segments between pieces of music; the transcript only contains the speech).
+Write in the same language as the transcript, as plain text without markdown.
+Start with two or three sentences giving the gist of the evening. Then list the
+topics, guests and notable moments in order, one per line starting with "- " and
+the approximate time in brackets taken from the transcript, e.g. "- [21:40] ...".
+Stay factual: only report what is said in the transcript, and when a passage is
+unclear, say so briefly rather than guessing. Keep the whole summary under 2500
+characters."""
+
+
+def log(message):
+    print(message, flush=True)  # public log: never transcript or summary content
+
+
+def clock(seconds):
+    return f"{int(seconds) // 3600}:{int(seconds) % 3600 // 60:02d}:{int(seconds) % 60:02d}"
+
+
+def minutes(duration):
+    """'H:MM:SS' (appProperties) -> minutes, 0 if unknown."""
+    try:
+        h, m, s = (int(x) for x in duration.split(":"))
+        return h * 60 + m + s / 60
+    except (AttributeError, ValueError):
+        return 0
+
+
+def recording_start(name):
+    """Start time from a name like '<prefix> 25/12/26 21:00-00:40.mp3', or None."""
+    m = CURRENT_NAME.match(name)
+    if not m:
+        return None
+    _, d, mo, yy, h1, m1 = m.groups()[:6]
+    return datetime(2000 + int(yy), int(mo), int(d), int(h1), int(m1), tzinfo=TZ)
+
+
+def pick(files, min_minutes, wanted=""):
+    """The file to summarize: the one named in 'wanted' (id), else the newest
+    recording long enough that has no summary yet."""
+    for f in files:
+        if wanted and f["id"] == wanted:
+            return f
+    if wanted:
+        return None
+    for f in files:  # newest first
+        long_enough = minutes((f.get("appProperties") or {}).get("duration")) >= min_minutes
+        if long_enough and not f.get("description"):
+            return f
+    return None
+
+
+def transcribe(path, start, config):
+    """Transcript lines '[HH:MM] text'. Stops early if it would exceed the time budget."""
+    from faster_whisper import WhisperModel  # heavy import, only when needed
+
+    name = config.get("whisper_model", "small")
+    beam = config.get("whisper_beam_size", "1")
+    budget = config.get("transcription_max_minutes", "270")
+    budget = int(budget) * 60 if budget.isdigit() else 270 * 60
+    language = os.environ.get("TRANSCRIPT_LANGUAGE", "").strip() or None
+    model = WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 4)
+    began = time.time()
+    segments, _ = model.transcribe(path, language=language, vad_filter=True,
+                                   beam_size=int(beam) if beam.isdigit() else 1,
+                                   condition_on_previous_text=False)
+    lines, last, complete = [], 0.0, True
+    for seg in segments:
+        stamp = (start + timedelta(seconds=seg.start)).strftime("%H:%M") if start else clock(seg.start)
+        text = seg.text.strip()
+        if text:
+            lines.append(f"[{stamp}] {text}")
+        last = seg.end
+        if time.time() - began > budget:
+            complete = False
+            break
+    log(f"Transcription {'finished' if complete else 'stopped at the time limit'}: "
+        f"{len(lines)} segment(s), {clock(time.time() - began)} of computing")
+    return lines, complete, last
+
+
+def summarize(lines, complete):
+    """Summary by Claude (streaming: the transcript is long)."""
+    note = "" if complete else ("\n(The transcript stops before the end of the recording; "
+                                "say so at the end of the summary.)")
+    client = anthropic.Anthropic()
+    with client.beta.messages.stream(
+        model=MODEL,
+        max_tokens=32000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",  # another model takes over if this one declines
+        output_config={"effort": "medium"},
+        system=SYSTEM,
+        messages=[{"role": "user",
+                   "content": "Transcript:\n\n" + "\n".join(lines) + note}],
+    ) as stream:
+        message = stream.get_final_message()
+    if message.stop_reason == "refusal":
+        raise RuntimeError("Summary declined by the model")
+    text = "".join(block.text for block in message.content if block.type == "text").strip()
+    if not text:
+        raise RuntimeError("Empty summary")
+    log(f"Summary written ({message.usage.input_tokens} input tokens, "
+        f"{message.usage.output_tokens} output tokens)")
+    return text
+
+
+def main():
+    config = load_config()
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        raise SystemExit("ANTHROPIC_API_KEY secret missing")
+    drive = Drive()
+    if not drive.configured():
+        raise SystemExit("GDRIVE_* secrets missing")
+    drive.login()
+    folder_id = drive.folder(os.environ.get("DRIVE_FOLDER", "").strip() or "Recordings")
+    min_minutes = config.get("summary_min_minutes", "10")
+    min_minutes = int(min_minutes) if min_minutes.isdigit() else 10
+    target = pick(drive.list_audio(folder_id), min_minutes,
+                  os.environ.get("SUMMARY_FILE_ID", "").strip())
+    if not target:
+        log("No recording to summarize")
+        return
+    log("Recording found, downloading")
+    os.makedirs(WORK_DIR, exist_ok=True)
+    path = os.path.join(WORK_DIR, "audio" + os.path.splitext(target["name"])[1])
+    drive.download(target["id"], path)
+
+    lines, complete, _ = transcribe(path, recording_start(target["name"]), config)
+    if not lines:
+        log("No speech found, nothing to summarize")
+        return
+    summary = summarize(lines, complete)
+
+    drive.login()  # the access token expires after one hour
+    drive.set_description(target["id"], summary)
+    title = os.environ.get("PODCAST_TITLE", "").strip() or "Recordings"
+    drive.update_feed(folder_id, title)
+    log("Episode description and podcast feed updated")
+    label = target["name"].rsplit(".", 1)[0]
+    if push(summary, title=f"Summary: {label}", tags="memo"):
+        log("Summary pushed to ntfy")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except anthropic.APIStatusError as e:
+        log(f"Failed: Claude API error (HTTP {e.status_code})")
+        push(f"Summary failed: Claude API error (HTTP {e.status_code})",
+             title="Summary FAILED", priority="high", tags="warning")
+        sys.exit(1)
+    except (anthropic.APIError, RuntimeError, requests.RequestException) as e:
+        detail = str(e) if isinstance(e, RuntimeError) else type(e).__name__
+        log(f"Failed: {detail}")
+        push(f"Summary failed: {detail}", title="Summary FAILED", priority="high", tags="warning")
+        sys.exit(1)
