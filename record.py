@@ -53,6 +53,9 @@ LOG_LINES = []
 EMAIL_ONLY = []  # private lines sent by email only (never to the public log or ntfy)
 FEED_NAME = "feed.xml"
 SHOW_END_POLL_SECONDS = 45  # how often the end-of-show signal is checked
+# Older name formats ("<word> 2026-11-10 2100-0200.mp3", "... 21h00-02h00.mp3"),
+# renamed to the current one ("Recording 10/11/26 21:00-02:00.mp3").
+OLD_NAME = re.compile(r"^\w+ (\d{4})-(\d{2})-(\d{2}) (\d{2})h?(\d{2})-(\d{2})h?(\d{2})(\.mp3|\.m4a)$")
 SHOW_END_PATTERN = re.compile(r"show-ended\s+(\S+)\s+ends-at\s+(\S+)")
 PUSH_EACH_STEP = False  # set from settings.txt (push_each_step)
 PUSH_REPEAT_SECONDS = 600  # the same message is pushed at most once per 10 minutes
@@ -540,6 +543,21 @@ class Drive:
             if not page:
                 return files
 
+    def rename_old(self, folder_id):
+        """Renames recordings that still have an older name format; returns how many."""
+        count = 0
+        for f in self.list_audio(folder_id):
+            m = OLD_NAME.match(f["name"])
+            if not m:
+                continue
+            y, mo, d, h1, m1, h2, m2, ext = m.groups()
+            name = f"Recording {d}/{mo}/{y[2:]} {h1}:{m1}-{h2}:{m2}{ext}"
+            r = requests.patch(f"{DRIVE_FILES}/{f['id']}", json={"name": name},
+                               headers=self.headers(), timeout=30)
+            r.raise_for_status()
+            count += 1
+        return count
+
     def update_feed(self, folder_id, title):
         """Rebuilds the podcast feed (feed.xml in the folder) and returns its URL."""
         items = []
@@ -657,6 +675,12 @@ def main():
     folder_name = os.environ.get("DRIVE_FOLDER", "").strip() or "Recordings"
     folder_id = drive.folder(folder_name)
     log("Google Drive OK")
+    try:
+        renamed = drive.rename_old(folder_id)
+        if renamed:
+            log(f"{renamed} recording(s) renamed to the current name format")
+    except requests.RequestException as e:
+        log(f"Could not rename old recordings ({type(e).__name__}), continuing")
     keep = config.get("retention_days", "14")
     if keep.isdigit() and int(keep) > 0:
         try:
