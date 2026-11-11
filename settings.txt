@@ -12,3 +12,8 @@ push_each_step = yes
 # Private podcast feed (feed.xml in the Drive folder; its link is sent by email only).
 # "yes" shares each recording with anyone who has its link (needed by podcast apps).
 podcast_feed = yes
+# End-of-show signal (ntfy, tag show_end): the file is cut this many seconds after the
+# estimated end, to make up for the stream's delay (0 = cut exactly at the estimate).
+show_end_margin_seconds = 30
+# Also watch for the signal during test runs (minutes > 0): yes / no.
+show_end_in_tests = no

@@ -24,6 +24,7 @@ format is re-encoded to MP3 at `bitrate_kbps`. Recordings older than
 | `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN` | Google access, see below |
 | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `REPORT_TO` | optional email report |
 | `NTFY_TOPIC` | optional ntfy notifications |
+| `SHOW_END_TOPIC` | optional ntfy topic carrying the end-of-show signal (default: `NTFY_TOPIC`) |
 
 ## Starting the recording
 
@@ -65,6 +66,22 @@ https://myaccount.google.com/apppasswords and set `GMAIL_ADDRESS` and
 Install the ntfy app, subscribe to a long, hard-to-guess topic and set it in
 `NTFY_TOPIC`. `push_each_step` in `settings.txt` chooses one notification per
 step or a single summary.
+
+## End-of-show signal (optional)
+
+Another job can announce the real end of the show on ntfy (topic
+`SHOW_END_TOPIC`, or `NTFY_TOPIC` if unset) with a message tagged `show_end`:
+
+```
+show-ended <detection time ISO> ends-at <estimated end time ISO>
+```
+
+From the first midnight of the slot (from its start if the slot does not cross
+midnight), the recorder checks the topic every 45 seconds
+(`/json?poll=1&since=<recording start>`). On the signal it stops cleanly, cuts the
+file `show_end_margin_seconds` after `ends-at` (to make up for the stream's delay)
+and uploads it as usual. Without a signal it stops at `RECORD_END`, the safety
+limit. Test runs ignore the signal unless `show_end_in_tests = yes`.
 
 ## Private podcast feed (optional)
 

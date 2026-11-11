@@ -16,11 +16,14 @@ GitHub secrets used:
   GMAIL_APP_PASSWORD    optional: Gmail app password
   REPORT_TO             optional: report recipient (defaults to GMAIL_ADDRESS)
   NTFY_TOPIC            optional: ntfy topic for a push notification
+  SHOW_END_TOPIC        optional: ntfy topic carrying the end-of-show signal (default: NTFY_TOPIC)
 Non-secret settings: settings.txt.
 """
 import glob
 import json
 import os
+import re
+import signal
 import smtplib
 import subprocess
 import sys
@@ -28,7 +31,7 @@ import time
 from email.message import EmailMessage
 from email.utils import format_datetime
 from xml.sax.saxutils import escape
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -49,6 +52,8 @@ MAX_RUN = timedelta(minutes=330)
 LOG_LINES = []
 EMAIL_ONLY = []  # private lines sent by email only (never to the public log or ntfy)
 FEED_NAME = "feed.xml"
+SHOW_END_POLL_SECONDS = 45  # how often the end-of-show signal is checked
+SHOW_END_PATTERN = re.compile(r"show-ended\s+(\S+)\s+ends-at\s+(\S+)")
 PUSH_EACH_STEP = False  # set from settings.txt (push_each_step)
 PUSH_REPEAT_SECONDS = 600  # the same message is pushed at most once per 10 minutes
 _last_push = {}
@@ -233,50 +238,166 @@ def choose_format(stream_url, copy, bitrate):
     return fmt
 
 
-def record(stream_url, start, end, fmt):
-    """Records until 'end'; restarts ffmpeg if the stream drops. Returns the segments."""
+class ShowEndWatcher:
+    """Polls ntfy for the end-of-show signal (tag show_end) published by another job.
+
+    The topic comes from a secret and is never printed."""
+
+    def __init__(self, since, poll_from):
+        self.topic = (os.environ.get("SHOW_END_TOPIC", "").strip()
+                      or os.environ.get("NTFY_TOPIC", "").strip())
+        self.since = int(since.timestamp())
+        self.poll_from = poll_from
+        self.next_poll = 0.0
+        self.errors = 0
+
+    def check(self):
+        """Returns {'detected', 'ends_at'} once the signal has been published, else None."""
+        if not self.topic or datetime.now(TZ) < self.poll_from or time.time() < self.next_poll:
+            return None
+        self.next_poll = time.time() + SHOW_END_POLL_SECONDS
+        try:
+            r = requests.get(f"https://ntfy.sh/{self.topic}/json",
+                             params={"poll": "1", "since": str(self.since), "tags": "show_end"},
+                             timeout=20)
+            r.raise_for_status()
+        except requests.RequestException as e:
+            self.errors += 1
+            if self.errors in (1, 10, 50):
+                log("End-of-show check failed, retrying",
+                    private=f"End-of-show check failed ({type(e).__name__}), retrying", quiet=True)
+            return None
+        for line in r.text.splitlines():
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("event") == "message" and "show_end" in (msg.get("tags") or []):
+                return parse_show_end(msg)
+        return None
+
+
+def parse_show_end(msg):
+    """'show-ended <ISO> ends-at <ISO>' -> times in TZ; falls back to the message time."""
+    detected = ends_at = None
+    match = SHOW_END_PATTERN.search(msg.get("message", ""))
+    if match:
+        try:
+            detected = datetime.fromisoformat(match.group(1)).astimezone(TZ)
+            ends_at = datetime.fromisoformat(match.group(2)).astimezone(TZ)
+        except ValueError:
+            detected = ends_at = None
+    if detected is None and msg.get("time"):
+        detected = datetime.fromtimestamp(int(msg["time"]), TZ)
+    return {"detected": detected or datetime.now(TZ), "ends_at": ends_at}
+
+
+def stop_ffmpeg(proc):
+    """Asks ffmpeg to finish its file cleanly, then forces it if needed."""
+    if proc.poll() is not None:
+        return
+    proc.send_signal(signal.SIGINT)
+    try:
+        proc.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def record(stream_url, start, end, fmt, watcher=None):
+    """Records until 'end' or the end-of-show signal; restarts ffmpeg if the stream drops.
+
+    Returns ([(segment path, wall-clock start)], signal or None)."""
     os.makedirs(WORK_DIR, exist_ok=True)
     wait = (start - datetime.now(TZ)).total_seconds()
     if wait > 0:
         time.sleep(wait)
-    log("Recording", private=f"Recording until {end:%H:%M}")
+    log("Recording", private=f"Recording until {end:%H:%M} at the latest")
 
-    segments, failures = [], 0
-    while True:
+    segments, failures, show_end = [], 0, None
+    while show_end is None:
         remaining = (end - datetime.now(TZ)).total_seconds()
         if remaining < 5:
             break
         path = os.path.join(WORK_DIR, f"segment_{len(segments):03d}{fmt['seg']}")
         if os.path.exists(path):
             os.remove(path)
-        try:
-            subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error", "-nostdin",
-                 "-reconnect", "1", "-reconnect_streamed", "1",
-                 "-reconnect_on_network_error", "1", "-reconnect_at_eof", "1",
-                 "-reconnect_delay_max", "30",
-                 "-rw_timeout", "30000000",
-                 "-i", stream_url, "-t", str(int(remaining)),
-                 "-map", "0:a:0", *fmt["args"], path],
-                timeout=remaining + 180,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # never print the stream address
-            )
-        except subprocess.TimeoutExpired:
-            log("ffmpeg stuck, restarting")
+        seg_start = datetime.now(TZ)
+        proc = subprocess.Popen(
+            ["ffmpeg", "-y", "-loglevel", "error", "-nostdin",
+             "-reconnect", "1", "-reconnect_streamed", "1",
+             "-reconnect_on_network_error", "1", "-reconnect_at_eof", "1",
+             "-reconnect_delay_max", "30",
+             "-rw_timeout", "30000000",
+             "-i", stream_url, "-t", str(int(remaining)),
+             "-map", "0:a:0", *fmt["args"], path],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)  # never print the stream address
+        deadline = time.time() + remaining + 180
+        while proc.poll() is None:
+            time.sleep(5)
+            if watcher:
+                show_end = watcher.check()
+            if show_end:
+                stop_ffmpeg(proc)
+                break
+            if time.time() > deadline:
+                log("ffmpeg stuck, restarting")
+                stop_ffmpeg(proc)
         if os.path.exists(path) and os.path.getsize(path) > 50_000:
-            segments.append(path)
+            segments.append((path, seg_start))
             failures = 0
         else:
             failures += 1
             if os.path.exists(path):
                 os.remove(path)
-        if (end - datetime.now(TZ)).total_seconds() >= 5:
+        if show_end is None and (end - datetime.now(TZ)).total_seconds() >= 5:
             delay = 2 if failures < 5 else 10 if failures < 30 else 60
             log("Stream interrupted, retrying", private=f"Stream interrupted, retrying in {delay} s",
                 quiet=True)
             time.sleep(delay)
+    if show_end:
+        ends = f", show ends at {show_end['ends_at']:%H:%M:%S}" if show_end["ends_at"] else ""
+        log("End of show signal received",
+            private=f"End of show signal received (detected {show_end['detected']:%H:%M:%S}{ends})")
     log(f"Recording finished ({len(segments)} segment(s))")
-    return segments
+    return segments, show_end
+
+
+def seconds(path):
+    """Exact duration of an audio file in seconds, or None."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "csv=p=0", path], capture_output=True, text=True,
+                             timeout=60).stdout.strip()
+        return float(out)
+    except (subprocess.SubprocessError, ValueError):
+        return None
+
+
+def cut_position(segments, ends_at):
+    """Position (s) of the wall-clock time 'ends_at' in the assembled file, or None."""
+    offset = 0.0
+    for path, seg_start in segments:
+        duration = seconds(path)
+        if duration is None:
+            return None
+        if ends_at <= seg_start:  # the end falls in a gap before this segment
+            return offset
+        if ends_at < seg_start + timedelta(seconds=duration):
+            return offset + (ends_at - seg_start).total_seconds()
+        offset += duration
+    return None  # after the end of the recording: nothing to cut
+
+
+def cut(path, position):
+    """Keeps the first 'position' seconds of the file (no re-encoding)."""
+    tmp = path + ".cut" + os.path.splitext(path)[1]
+    extra = ["-movflags", "+faststart"] if path.endswith(".m4a") else []
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-nostdin", "-i", path,
+                    "-t", f"{position:.3f}", "-map", "0:a:0", "-c", "copy", *extra, tmp],
+                   check=True)
+    os.replace(tmp, path)
 
 
 def download_url(file_id):
@@ -557,13 +678,38 @@ def main():
         time.sleep(wait - 60)
     copy = config.get("stream_copy", "yes").lower() in ("yes", "true", "1", "on")
     fmt = choose_format(stream_url, copy, bitrate)
-    segments = record(stream_url, begin, end, fmt)
+    # End-of-show signal: checked from the first midnight of the slot (from the start if
+    # the slot does not cross midnight); RECORD_END stays the safety limit.
+    midnight = datetime.combine(start.date() + timedelta(days=1), dtime(0), TZ)
+    watcher = None
+    if os.environ.get("TEST_MINUTES", "").strip() in ("", "0") or config.get(
+            "show_end_in_tests", "no").lower() in ("yes", "true", "1", "on"):
+        watcher = ShowEndWatcher(begin, midnight if midnight < end else begin)
+    segments, show_end = record(stream_url, begin, end, fmt, watcher)
     if not segments:
         raise SystemExit("Nothing could be recorded (stream unreachable)")
 
-    name = f"Recording {start:%Y-%m-%d} {start:%H%M}-{end:%H%M}{fmt['out']}"
-    output = os.path.join(WORK_DIR, name)
-    assemble(segments, output)
+    finish = datetime.now(TZ) if show_end else end
+    # Where the show ends in the file: measured on the segments, before they are assembled.
+    position = cut_position(segments, show_end["ends_at"]) if show_end and show_end["ends_at"] else None
+    output = os.path.join(WORK_DIR, "assembled" + fmt["out"])
+    assemble([path for path, _ in segments], output)
+    if show_end and show_end["ends_at"]:
+        margin = config.get("show_end_margin_seconds", "30")
+        margin = int(margin) if margin.isdigit() else 30
+        total = seconds(output)
+        if position is not None and total and 0 < position + margin < total:
+            cut(output, position + margin)
+            finish = show_end["ends_at"] + timedelta(seconds=margin)
+            log("File cut at the end of the show",
+                private=f"File cut at {finish:%H:%M:%S} ({margin} s after the estimated end)")
+        else:
+            log("End of show outside the recording, file not cut")
+
+    name = f"Recording {start:%Y-%m-%d} {start:%H%M}-{finish:%H%M}{fmt['out']}"
+    final = os.path.join(WORK_DIR, name)
+    os.replace(output, final)
+    output = final
     size_mb = os.path.getsize(output) / 1_000_000
     log(f"File ready ({size_mb:.0f} MB)", private=f"File ready: {name} ({size_mb:.0f} MB)")
 
