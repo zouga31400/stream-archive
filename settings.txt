@@ -17,10 +17,19 @@ podcast_feed = yes
 show_end_margin_seconds = 30
 # Also watch for the signal during test runs (minutes > 0): yes / no.
 show_end_in_tests = no
-# Summary (workflow summary.yml, secret ANTHROPIC_API_KEY): Whisper model used on the
-# runner (tiny, base, small, medium: slower but more accurate), beam size (1 = fastest),
-# shortest recording summarized (minutes) and transcription time limit (minutes).
+# Summary (workflow summary.yml): Whisper model used on the runner (tiny, base, small,
+# medium: slower but more accurate), beam size (1 = fastest), shortest recording
+# summarized (minutes) and transcription time limit (minutes).
 whisper_model = small
 whisper_beam_size = 1
 summary_min_minutes = 10
-transcription_max_minutes = 270
+transcription_max_minutes = 200
+# Who writes the summary: "local" (open model on the runner with llama.cpp, free) or
+# "claude" (Claude API, secret ANTHROPIC_API_KEY). Local model: Hugging Face repository
+# and GGUF file, context size (tokens), and the time after which the job stops taking
+# notes and writes the summary (minutes; GitHub stops jobs at 6 hours).
+summary_engine = local
+summary_model_repo = bartowski/Mistral-Nemo-Instruct-2407-GGUF
+summary_model_file = Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
+summary_context_tokens = 16384
+summary_deadline_minutes = 320

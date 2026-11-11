@@ -1,12 +1,15 @@
-"""Transcribes the latest recording with Whisper (on the runner) and has Claude
-summarize it. The summary becomes the episode description in the podcast feed and
-is pushed to ntfy. Transcripts and summaries never appear in the public log.
+"""Transcribes the latest recording with Whisper and summarizes it, both on the
+runner: by default with an open model run by llama.cpp (free, nothing leaves
+GitHub and Drive), or with Claude if summary_engine = claude. The summary becomes the
+episode description in the podcast feed and is pushed to ntfy. Transcripts and
+summaries never appear in the public log.
 
 GitHub secrets used (besides the Drive ones of record.py):
-  ANTHROPIC_API_KEY     Claude API key
   TRANSCRIPT_LANGUAGE   optional: language code of the recordings, e.g. en (default: detected)
+  ANTHROPIC_API_KEY     only with summary_engine = claude
 Settings (settings.txt): whisper_model, whisper_beam_size, summary_min_minutes,
-transcription_max_minutes.
+transcription_max_minutes, summary_engine, summary_model_repo, summary_model_file,
+summary_context_tokens, summary_deadline_minutes.
 """
 import os
 import sys
@@ -20,7 +23,11 @@ import record
 from record import CURRENT_NAME, TZ, Drive, load_config, name_prefix, push
 
 WORK_DIR = os.path.join(record.HERE, "summary")
-MODEL = "claude-sonnet-5-5"
+STARTED = time.time()
+CLAUDE_MODEL = "claude-sonnet-5-5"
+LOCAL_REPO = "bartowski/Mistral-Nemo-Instruct-2407-GGUF"
+LOCAL_FILE = "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf"
+CHUNK_CHARS = 20000  # about 30 minutes of speech per part, fits a 16k-token context
 SYSTEM = """You summarize the transcript of one evening of an audio programme \
 (talk segments between pieces of music; the transcript only contains the speech).
 Write in the same language as the transcript, as plain text without markdown.
@@ -102,18 +109,93 @@ def transcribe(path, start, config):
     return lines, complete, last
 
 
+def language_rule():
+    code = os.environ.get("TRANSCRIPT_LANGUAGE", "").strip()
+    return (f"Write in the language whose ISO 639-1 code is '{code}'." if code
+            else "Write in the same language as the transcript.")
+
+
+def load_local_model(config):
+    """Downloads (Hugging Face, GGUF format) and loads the open model with llama.cpp."""
+    from huggingface_hub import hf_hub_download  # heavy imports, only when needed
+    from llama_cpp import Llama
+
+    path = hf_hub_download(config.get("summary_model_repo", LOCAL_REPO),
+                           config.get("summary_model_file", LOCAL_FILE))
+    ctx = config.get("summary_context_tokens", "16384")
+    return Llama(model_path=path, n_ctx=int(ctx) if ctx.isdigit() else 16384,
+                 n_threads=os.cpu_count() or 4, verbose=False)
+
+
+def ask_local(llm, instructions, text):
+    """One request to the local model. The instructions go in the user message:
+    some open-model chat templates have no system role."""
+    reply = llm.create_chat_completion(
+        messages=[{"role": "user", "content": instructions + "\n\n" + text}],
+        temperature=0.2, max_tokens=1200)
+    return (reply["choices"][0]["message"].get("content") or "").strip()
+
+
+def split_parts(lines, size=CHUNK_CHARS):
+    """Groups transcript lines into parts of about 'size' characters."""
+    parts, current, length = [], [], 0
+    for line in lines:
+        if current and length + len(line) + 1 > size:
+            parts.append(current)
+            current, length = [], 0
+        current.append(line)
+        length += len(line) + 1
+    if current:
+        parts.append(current)
+    return parts
+
+
+def summarize_local(lines, complete, config):
+    """Summary by an open model on the runner: notes per part, then a final summary."""
+    llm = load_local_model(config)
+    log(f"Local model loaded, {clock(time.time() - STARTED)} elapsed")
+    deadline = config.get("summary_deadline_minutes", "320")
+    deadline = STARTED + (int(deadline) if deadline.isdigit() else 320) * 60
+
+    parts = split_parts(lines)
+    note_rule = ("You take notes on one part of the transcript of an audio programme "
+                 "(speech only, between pieces of music). List the topics, guests and "
+                 "notable moments in order, one short line each starting with \"- \" and "
+                 "the time in brackets from the transcript. Only report what is said. "
+                 + language_rule() + " Plain text, at most 12 lines.")
+    notes, done = [], 0
+    for i, part in enumerate(parts, 1):
+        if time.time() > deadline:
+            break
+        notes.append(ask_local(llm, note_rule, f"Part {i}/{len(parts)}:\n\n" + "\n".join(part)))
+        done = i
+    log(f"Notes taken on {done}/{len(parts)} part(s), {clock(time.time() - STARTED)} elapsed")
+    if not notes:
+        raise RuntimeError("No time left to summarize")
+    partial = not complete or done < len(parts)
+    final_rule = (SYSTEM.replace("the transcript of one evening", "notes taken on one evening")
+                  .replace("Write in the same language as the transcript.", language_rule()))
+    if partial:
+        final_rule += "\nThe notes stop before the end of the recording; say so at the end."
+    text = ask_local(llm, final_rule, "Notes:\n\n" + "\n".join(notes))
+    if not text:
+        raise RuntimeError("Empty summary")
+    log(f"Summary written by the local model, {clock(time.time() - STARTED)} elapsed")
+    return text
+
+
 def summarize(lines, complete):
     """Summary by Claude (streaming: the transcript is long)."""
     note = "" if complete else ("\n(The transcript stops before the end of the recording; "
                                 "say so at the end of the summary.)")
     client = anthropic.Anthropic()
     with client.beta.messages.stream(
-        model=MODEL,
+        model=CLAUDE_MODEL,
         max_tokens=32000,
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",  # another model takes over if this one declines
         output_config={"effort": "medium"},
-        system=SYSTEM,
+        system=SYSTEM.replace("Write in the same language as the transcript.", language_rule()),
         messages=[{"role": "user",
                    "content": "Transcript:\n\n" + "\n".join(lines) + note}],
     ) as stream:
@@ -130,7 +212,8 @@ def summarize(lines, complete):
 
 def main():
     config = load_config()
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    engine = config.get("summary_engine", "local").lower()
+    if engine == "claude" and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
         raise SystemExit("ANTHROPIC_API_KEY secret missing")
     drive = Drive()
     if not drive.configured():
@@ -153,7 +236,10 @@ def main():
     if not lines:
         log("No speech found, nothing to summarize")
         return
-    summary = summarize(lines, complete)
+    if engine == "claude":
+        summary = summarize(lines, complete)
+    else:
+        summary = summarize_local(lines, complete, config)
 
     drive.login()  # the access token expires after one hour
     drive.set_description(target["id"], summary)

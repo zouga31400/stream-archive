@@ -24,7 +24,7 @@ format is re-encoded to MP3 at `bitrate_kbps`. Recordings older than
 | `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN` | Google access, see below |
 | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `REPORT_TO` | optional email report |
 | `NTFY_TOPIC` | optional ntfy notifications |
-| `ANTHROPIC_API_KEY` | optional, Claude API key for the summaries |
+| `ANTHROPIC_API_KEY` | optional, Claude API key (only with `summary_engine = claude`) |
 | `TRANSCRIPT_LANGUAGE` | optional, language code of the recordings (default: detected) |
 | `SHOW_END_TOPIC` | optional ntfy topic carrying the end-of-show signal (default: `NTFY_TOPIC`) |
 
@@ -98,11 +98,14 @@ feed title.
 
 After each recording, the `Summary` workflow downloads the newest recording that
 has no summary yet (at least `summary_min_minutes` long), transcribes its speech
-with Whisper on the runner (`whisper_model`, music is skipped), and has Claude
-(Sonnet 5.5) write a summary with approximate times. The summary becomes the
-episode description in the podcast feed and is pushed to ntfy. Transcripts and
-summaries never appear in the public log. Needs the `ANTHROPIC_API_KEY` secret;
-a specific recording can be summarized by hand (Actions > "Summary" > "Run
+with Whisper on the runner (`whisper_model`, music is skipped) and writes a summary
+with approximate times. By default (`summary_engine = local`) the summary is written
+on the runner by an open model (Mistral NeMo, GGUF, run with llama.cpp): free and
+nothing leaves GitHub and Drive, but slow (notes per part of the transcript, then a
+final summary). With `summary_engine = claude` it is written by Claude (Sonnet 5.5,
+secret `ANTHROPIC_API_KEY`). The summary becomes the episode description in the
+podcast feed and is pushed to ntfy. Transcripts and summaries never appear in the
+public log. A specific recording can be summarized by hand (Actions > "Summary" > "Run
 workflow" with its Drive file id).
 
 ## Troubleshooting

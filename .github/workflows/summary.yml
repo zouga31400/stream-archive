@@ -1,6 +1,7 @@
 name: Summary
 # After each recording: transcribe the newest recording with Whisper on the runner,
-# summarize it with Claude, and put the summary in the podcast feed and on ntfy.
+# summarize it (open model on the runner, or Claude), and put the summary in the
+# podcast feed and on ntfy.
 on:
   workflow_run:
     workflows: ["Recording"]
@@ -37,6 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install tools
-        run: pip install faster-whisper anthropic requests
+        # llama-cpp-python is built from source here (a few minutes); only needed for
+        # the local summary engine.
+        run: |
+          pip install faster-whisper anthropic requests huggingface_hub
+          if grep -Eq '^summary_engine *= *local' settings.txt; then pip install llama-cpp-python; fi
       - name: Transcribe and summarize
         run: python summarize.py
