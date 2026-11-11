@@ -12,6 +12,7 @@ transcription_max_minutes, summary_engine, summary_model_repo, summary_model_fil
 summary_context_tokens, summary_deadline_minutes.
 """
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -82,6 +83,17 @@ def pick(files, min_minutes, wanted=""):
     return None
 
 
+def decode(path):
+    """Audio as 16 kHz mono floats, decoded by ffmpeg (Whisper's own decoder depends
+    on a library whose versions do not always match)."""
+    import numpy as np
+
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", path,
+                          "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+                         capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+
+
 def transcribe(path, start, config):
     """Transcript lines '[HH:MM] text'. Stops early if it would exceed the time budget."""
     from faster_whisper import WhisperModel  # heavy import, only when needed
@@ -93,7 +105,8 @@ def transcribe(path, start, config):
     language = os.environ.get("TRANSCRIPT_LANGUAGE", "").strip() or None
     model = WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 4)
     began = time.time()
-    segments, _ = model.transcribe(path, language=language, vad_filter=True,
+    audio = decode(path)
+    segments, _ = model.transcribe(audio, language=language, vad_filter=True,
                                    beam_size=int(beam) if beam.isdigit() else 1,
                                    condition_on_previous_text=False)
     lines, last, complete = [], 0.0, True

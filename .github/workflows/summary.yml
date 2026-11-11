@@ -45,6 +45,8 @@ jobs:
         # llama-cpp-python is built from source here (a few minutes); only needed for
         # the local summary engine.
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
           pip install faster-whisper anthropic requests huggingface_hub
           if grep -Eq '^summary_engine *= *local' settings.txt; then pip install llama-cpp-python; fi
       - name: Transcribe and summarize
