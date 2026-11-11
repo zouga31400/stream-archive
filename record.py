@@ -53,9 +53,15 @@ LOG_LINES = []
 EMAIL_ONLY = []  # private lines sent by email only (never to the public log or ntfy)
 FEED_NAME = "feed.xml"
 SHOW_END_POLL_SECONDS = 45  # how often the end-of-show signal is checked
-# Older name formats ("<word> 2026-11-10 2100-0200.mp3", "... 21h00-02h00.mp3"),
-# renamed to the current one ("Recording 10/11/26 21:00-02:00.mp3").
+# Older name formats ("<word> 2026-11-10 2100-0200.mp3", "... 21h00-02h00.mp3") and
+# current names with another prefix are renamed to "<prefix> 10/11/26 21:00-02:00.mp3",
+# the prefix being the PODCAST_TITLE secret (default: Recording).
 OLD_NAME = re.compile(r"^\w+ (\d{4})-(\d{2})-(\d{2}) (\d{2})h?(\d{2})-(\d{2})h?(\d{2})(\.mp3|\.m4a)$")
+CURRENT_NAME = re.compile(r"^(.+) (\d{2})/(\d{2})/(\d{2}) (\d{2}):(\d{2})-(\d{2}):(\d{2})(\.mp3|\.m4a)$")
+
+
+def name_prefix():
+    return os.environ.get("PODCAST_TITLE", "").strip().replace("/", "-") or "Recording"
 SHOW_END_PATTERN = re.compile(r"show-ended\s+(\S+)\s+ends-at\s+(\S+)")
 PUSH_EACH_STEP = False  # set from settings.txt (push_each_step)
 PUSH_REPEAT_SECONDS = 600  # the same message is pushed at most once per 10 minutes
@@ -543,15 +549,19 @@ class Drive:
             if not page:
                 return files
 
-    def rename_old(self, folder_id):
-        """Renames recordings that still have an older name format; returns how many."""
+    def rename_old(self, folder_id, prefix):
+        """Gives every recording the current name format and prefix; returns how many."""
         count = 0
         for f in self.list_audio(folder_id):
-            m = OLD_NAME.match(f["name"])
-            if not m:
+            old, current = OLD_NAME.match(f["name"]), CURRENT_NAME.match(f["name"])
+            if old:
+                y, mo, d, h1, m1, h2, m2, ext = old.groups()
+                yy = y[2:]
+            elif current and current.group(1) != prefix:
+                _, d, mo, yy, h1, m1, h2, m2, ext = current.groups()
+            else:
                 continue
-            y, mo, d, h1, m1, h2, m2, ext = m.groups()
-            name = f"Recording {d}/{mo}/{y[2:]} {h1}:{m1}-{h2}:{m2}{ext}"
+            name = f"{prefix} {d}/{mo}/{yy} {h1}:{m1}-{h2}:{m2}{ext}"
             r = requests.patch(f"{DRIVE_FILES}/{f['id']}", json={"name": name},
                                headers=self.headers(), timeout=30)
             r.raise_for_status()
@@ -664,6 +674,18 @@ def main():
     if not drive.configured():
         raise SystemExit("GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN secrets missing")
 
+    if os.environ.get("TEST_MINUTES", "").strip().lower() == "feed":
+        # Maintenance only: rename the recordings and rebuild the podcast feed.
+        drive.login()
+        folder_id = drive.folder(os.environ.get("DRIVE_FOLDER", "").strip() or "Recordings")
+        renamed = drive.rename_old(folder_id, name_prefix())
+        log(f"{renamed} recording(s) renamed")
+        title = os.environ.get("PODCAST_TITLE", "").strip() or "Recordings"
+        feed_url, count = drive.update_feed(folder_id, title)
+        log("Podcast feed updated", private=f"Podcast feed updated ({count} episode(s))")
+        EMAIL_ONLY.append(f"Podcast feed (keep it private): {feed_url}")
+        return
+
     launched = datetime.now(TZ)
     start, end = compute_window()
     if end > launched + MAX_RUN:
@@ -676,7 +698,7 @@ def main():
     folder_id = drive.folder(folder_name)
     log("Google Drive OK")
     try:
-        renamed = drive.rename_old(folder_id)
+        renamed = drive.rename_old(folder_id, name_prefix())
         if renamed:
             log(f"{renamed} recording(s) renamed to the current name format")
     except requests.RequestException as e:
@@ -730,9 +752,9 @@ def main():
         else:
             log("End of show outside the recording, file not cut")
 
-    # Name on Drive and in the podcast, e.g. "Recording 25/12/26 21:00-00:40.mp3".
+    # Name on Drive and in the podcast, e.g. "<prefix> 25/12/26 21:00-00:40.mp3".
     # The local file keeps a plain name, since "/" cannot be used in a file path.
-    name = f"Recording {start:%d/%m/%y} {start:%H:%M}-{finish:%H:%M}{fmt['out']}"
+    name = f"{name_prefix()} {start:%d/%m/%y} {start:%H:%M}-{finish:%H:%M}{fmt['out']}"
     size_mb = os.path.getsize(output) / 1_000_000
     log(f"File ready ({size_mb:.0f} MB)", private=f"File ready: {name} ({size_mb:.0f} MB)")
 

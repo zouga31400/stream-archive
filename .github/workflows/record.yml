@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       minutes:
-        description: "0 = normal recording of the slot; otherwise test duration in minutes"
+        description: "0 = normal recording of the slot; feed = only rename files and rebuild the podcast feed; otherwise test duration in minutes"
         default: "0"
 
 permissions:
