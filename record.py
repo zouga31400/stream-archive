@@ -706,10 +706,9 @@ def main():
         else:
             log("End of show outside the recording, file not cut")
 
-    name = f"Recording {start:%Y-%m-%d} {start:%H:%M}-{finish:%H:%M}{fmt['out']}"
-    final = os.path.join(WORK_DIR, name)
-    os.replace(output, final)
-    output = final
+    # Name on Drive and in the podcast, e.g. "Recording 25/12/26 21:00-00:40.mp3".
+    # The local file keeps a plain name, since "/" cannot be used in a file path.
+    name = f"Recording {start:%d/%m/%y} {start:%H:%M}-{finish:%H:%M}{fmt['out']}"
     size_mb = os.path.getsize(output) / 1_000_000
     log(f"File ready ({size_mb:.0f} MB)", private=f"File ready: {name} ({size_mb:.0f} MB)")
 
