@@ -74,8 +74,10 @@ def pick(files, min_minutes, wanted=""):
     if wanted:
         return None
     for f in files:  # newest first
-        long_enough = minutes((f.get("appProperties") or {}).get("duration")) >= min_minutes
-        if long_enough and not f.get("description"):
+        length = minutes((f.get("appProperties") or {}).get("duration"))
+        if not length:  # older uploads have no duration: estimate it from the size
+            length = int(f.get("size") or 0) / (64_000 / 8) / 60  # at 64 kb/s at least
+        if length >= min_minutes and not f.get("description"):
             return f
     return None
 
