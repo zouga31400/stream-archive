@@ -11,6 +11,9 @@ on:
       file_id:
         description: "Drive file id to summarize (empty = newest recording without a summary)"
         default: ""
+      redo:
+        description: "yes = summarize again even if the recording already has a summary"
+        default: "no"
 
 permissions:
   contents: read
@@ -35,6 +38,7 @@ jobs:
       GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       SUMMARY_FILE_ID: ${{ github.event.inputs.file_id }}
+      SUMMARY_REDO: ${{ github.event.inputs.redo }}
     steps:
       - uses: actions/checkout@v5
       # A Python version for which Whisper's and llama.cpp's packages are published.

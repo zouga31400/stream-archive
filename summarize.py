@@ -129,9 +129,18 @@ def transcribe(path, start, config):
     return lines, complete, last
 
 
+LANGUAGES = {"fr": "French", "en": "English", "es": "Spanish", "de": "German",
+             "it": "Italian", "pt": "Portuguese", "nl": "Dutch"}
+
+
+def language_name():
+    code = os.environ.get("TRANSCRIPT_LANGUAGE", "").strip().lower()
+    return LANGUAGES.get(code, code)
+
+
 def language_rule():
-    code = os.environ.get("TRANSCRIPT_LANGUAGE", "").strip()
-    return (f"Write in the language whose ISO 639-1 code is '{code}'." if code
+    name = language_name()
+    return (f"Write in {name} only, even though these instructions are in English." if name
             else "Write in the same language as the transcript.")
 
 
@@ -150,8 +159,10 @@ def load_local_model(config):
 def ask_local(llm, instructions, text):
     """One request to the local model. The instructions go in the user message:
     some open-model chat templates have no system role."""
+    # Small models follow the language of the last words they read: repeat the rule.
+    reminder = f"\n\n(Answer in {language_name()} only.)" if language_name() else ""
     reply = llm.create_chat_completion(
-        messages=[{"role": "user", "content": instructions + "\n\n" + text}],
+        messages=[{"role": "user", "content": instructions + "\n\n" + text + reminder}],
         temperature=0.2, max_tokens=1200)
     return (reply["choices"][0]["message"].get("content") or "").strip()
 
@@ -242,8 +253,11 @@ def main():
     folder_id = drive.folder(os.environ.get("DRIVE_FOLDER", "").strip() or "Recordings")
     min_minutes = config.get("summary_min_minutes", "10")
     min_minutes = int(min_minutes) if min_minutes.isdigit() else 10
-    target = pick(drive.list_audio(folder_id), min_minutes,
-                  os.environ.get("SUMMARY_FILE_ID", "").strip())
+    files = drive.list_audio(folder_id)
+    if os.environ.get("SUMMARY_REDO", "").strip().lower() in ("yes", "true", "1"):
+        for f in files:  # summarize again: ignore the existing summaries
+            f.pop("description", None)
+    target = pick(files, min_minutes, os.environ.get("SUMMARY_FILE_ID", "").strip())
     if not target:
         log("No recording to summarize")
         return

@@ -90,7 +90,7 @@ def log(*args, private=None, alert=False, quiet=False):
     print(message, flush=True)
     if private:
         message = private
-    line = f"{datetime.now(TZ):%H:%M:%S} {message}"
+    line = f"{datetime.now(TZ):%d/%m %H:%M:%S} {message}"  # private: email and ntfy
     LOG_LINES.append(line)
     if PUSH_EACH_STEP:
         now = time.time()
