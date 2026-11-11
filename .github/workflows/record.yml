@@ -26,6 +26,7 @@ jobs:
       RECORD_DAYS: ${{ secrets.RECORD_DAYS }}
       RECORD_TZ: ${{ secrets.RECORD_TZ }}
       DRIVE_FOLDER: ${{ secrets.DRIVE_FOLDER }}
+      PODCAST_TITLE: ${{ secrets.PODCAST_TITLE }}
       GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
       GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
       GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
