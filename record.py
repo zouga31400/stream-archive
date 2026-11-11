@@ -706,7 +706,7 @@ def main():
         else:
             log("End of show outside the recording, file not cut")
 
-    name = f"Recording {start:%Y-%m-%d} {start:%H%M}-{finish:%H%M}{fmt['out']}"
+    name = f"Recording {start:%Y-%m-%d} {start:%H:%M}-{finish:%H:%M}{fmt['out']}"
     final = os.path.join(WORK_DIR, name)
     os.replace(output, final)
     output = final
