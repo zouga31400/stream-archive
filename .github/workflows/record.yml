@@ -1,0 +1,45 @@
+name: Recording
+# Started by an external scheduler (or by hand) through workflow_dispatch.
+# The script waits for the slot start (secrets RECORD_*) and exits if there is nothing to do.
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "0 = normal recording of the slot; otherwise test duration in minutes"
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recording
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      STREAM_URL: ${{ secrets.STREAM_URL }}
+      RECORD_START: ${{ secrets.RECORD_START }}
+      RECORD_END: ${{ secrets.RECORD_END }}
+      RECORD_DAYS: ${{ secrets.RECORD_DAYS }}
+      RECORD_TZ: ${{ secrets.RECORD_TZ }}
+      DRIVE_FOLDER: ${{ secrets.DRIVE_FOLDER }}
+      GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+      GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+      GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      REPORT_TO: ${{ secrets.REPORT_TO }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      TEST_MINUTES: ${{ github.event.inputs.minutes }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install requests
+      - name: Record and upload to Google Drive
+        run: python record.py

@@ -1,0 +1,14 @@
+# Recording settings. Format: key = value. Lines starting with # are ignored.
+# The slot (times, days, time zone) and the Drive folder are GitHub secrets.
+# Copy the stream as it is when it is MP3 or AAC (no quality loss): yes / no.
+stream_copy = yes
+# MP3 quality in kbit/s when the stream has to be re-encoded (128 = about 58 MB per hour).
+bitrate_kbps = 128
+# Recordings permanently deleted after this many days (0 = never).
+retention_days = 14
+# ntfy notifications (secret NTFY_TOPIC): "yes" = one notification per step, in real
+# time; "no" = a single summary at the end.
+push_each_step = yes
+# Private podcast feed (feed.xml in the Drive folder; its link is sent by email only).
+# "yes" shares each recording with anyone who has its link (needed by podcast apps).
+podcast_feed = yes
