@@ -24,11 +24,15 @@ whisper_model = small
 whisper_beam_size = 1
 summary_min_minutes = 10
 transcription_max_minutes = 200
-# Who writes the summary: "local" (open model on the runner with llama.cpp, free) or
-# "claude" (Claude API, secret ANTHROPIC_API_KEY). Local model: Hugging Face repository
-# and GGUF file, context size (tokens), and the time after which the job stops taking
-# notes and writes the summary (minutes; GitHub stops jobs at 6 hours).
-summary_engine = local
+# Who writes the summary: "local" (open model on the runner with llama.cpp, free),
+# "claude" (Claude API, secret ANTHROPIC_API_KEY, model summary_claude_model) or "both"
+# (Claude first, then the local model; both summaries in the episode description).
+# Optional secret SUMMARY_INSTRUCTIONS: your own wishes added to the instructions.
+# Local model: Hugging Face repository and GGUF file, context size (tokens), and the
+# time after which the job stops taking notes and writes the summary (minutes; GitHub
+# stops jobs at 6 hours).
+summary_engine = both
+summary_claude_model = claude-haiku-5-5
 summary_model_repo = bartowski/Mistral-Nemo-Instruct-2407-GGUF
 summary_model_file = Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
 summary_context_tokens = 16384

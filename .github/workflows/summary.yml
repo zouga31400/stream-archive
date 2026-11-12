@@ -30,6 +30,7 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       TRANSCRIPT_LANGUAGE: ${{ secrets.TRANSCRIPT_LANGUAGE }}
+      SUMMARY_INSTRUCTIONS: ${{ secrets.SUMMARY_INSTRUCTIONS }}
       RECORD_TZ: ${{ secrets.RECORD_TZ }}
       DRIVE_FOLDER: ${{ secrets.DRIVE_FOLDER }}
       PODCAST_TITLE: ${{ secrets.PODCAST_TITLE }}
@@ -50,6 +51,6 @@ jobs:
         # the local summary engine.
         run: |
           pip install faster-whisper anthropic requests huggingface_hub imageio-ffmpeg
-          if grep -Eq '^summary_engine *= *local' settings.txt; then pip install llama-cpp-python; fi
+          if grep -Eq '^summary_engine *= *(local|both)' settings.txt; then pip install llama-cpp-python; fi
       - name: Transcribe and summarize
         run: python summarize.py

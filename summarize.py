@@ -25,7 +25,7 @@ from record import CURRENT_NAME, TZ, Drive, load_config, name_prefix, push
 
 WORK_DIR = os.path.join(record.HERE, "summary")
 STARTED = time.time()
-CLAUDE_MODEL = "claude-sonnet-5-5"
+CLAUDE_MODEL = "claude-haiku-5-5"  # summary_claude_model in settings.txt overrides it
 LOCAL_REPO = "bartowski/Mistral-Nemo-Instruct-2407-GGUF"
 LOCAL_FILE = "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf"
 CHUNK_CHARS = 20000  # about 30 minutes of speech per part, fits a 16k-token context
@@ -144,6 +144,69 @@ def language_rule():
             else "Write in the same language as the transcript.")
 
 
+# Instructions written in the recordings' language work better with small models.
+PROMPTS_FR = {
+    "notes": """Tu prends des notes sur un extrait de la transcription d'une émission \
+(uniquement la parole, entre des morceaux de musique ; la transcription automatique peut \
+contenir des erreurs).
+Pour chaque sujet abordé dans cet extrait, écris une ligne : « - [heure] sujet précis : ce \
+qui en est dit d'important », en gardant les noms de personnes, d'artistes, d'œuvres, de \
+lieux, les dates et les chiffres.
+Ignore les annonces de morceaux, les jingles, les publicités et les formules de politesse.
+N'invente rien ; si un passage est incompréhensible, laisse-le de côté.
+Écris en français, en texte brut, 12 lignes au maximum.""",
+    "final": """À partir des notes ci-dessous, prises sur une soirée d'une émission, rédige \
+un résumé en français, en texte brut sans markdown.
+1. Commence par « En bref : » suivi de deux ou trois phrases qui donnent l'essentiel de la \
+soirée (grands thèmes, invités).
+2. Puis « Au fil de la soirée : » et les sujets dans l'ordre, une ligne par sujet commençant \
+par « - [heure] », avec un détail concret pour chacun.
+Regroupe les notes qui parlent du même sujet, supprime les répétitions et les généralités \
+(du genre « ils discutent de divers sujets »). Ne rapporte que ce qui figure dans les notes.
+2500 caractères au maximum.""",
+    "claude": """Tu résumes la transcription d'une soirée d'une émission (uniquement la \
+parole, entre des morceaux de musique ; la transcription automatique peut contenir des \
+erreurs, corrige-les quand le sens est évident). Écris en français, en texte brut sans markdown.
+1. Commence par « En bref : » suivi de deux ou trois phrases qui donnent l'essentiel de la \
+soirée (grands thèmes, invités).
+2. Puis « Au fil de la soirée : » et les sujets dans l'ordre, une ligne par sujet commençant \
+par « - [heure] » (l'heure entre crochets vient de la transcription), avec un détail concret \
+pour chacun : noms, œuvres, lieux, dates.
+Ignore les annonces de morceaux, les jingles et les publicités. Ne rapporte que ce qui est dit ; \
+si un passage est confus, dis-le brièvement plutôt que de deviner. 2500 caractères au maximum.""",
+    "partial": "La transcription s'arrête avant la fin de l'enregistrement : signale-le à la fin.",
+    "reminder": "(Réponds uniquement en français.)",
+    "extra": "Consignes supplémentaires :",
+}
+
+
+def prompt(kind):
+    """Instructions for 'notes', 'final', 'claude', 'partial', 'reminder' or 'extra'."""
+    if os.environ.get("TRANSCRIPT_LANGUAGE", "").strip().lower() == "fr":
+        return PROMPTS_FR[kind]
+    english = {
+        "notes": ("You take notes on one part of the transcript of an audio programme "
+                  "(speech only, between pieces of music). For each topic, write one line "
+                  "\"- [time] precise topic: what is said about it\", keeping names, works, "
+                  "places, dates and figures. Ignore track announcements, jingles and ads. "
+                  "Only report what is said. " + language_rule()
+                  + " Plain text, at most 12 lines."),
+        "final": SYSTEM.replace("the transcript of one evening", "notes taken on one evening")
+                       .replace("Write in the same language as the transcript.", language_rule()),
+        "claude": SYSTEM.replace("Write in the same language as the transcript.", language_rule()),
+        "partial": "The text stops before the end of the recording; say so at the end.",
+        "reminder": f"(Answer in {language_name()} only.)" if language_name() else "",
+        "extra": "Additional instructions:",
+    }
+    return english[kind]
+
+
+def with_extra(instructions):
+    """Adds the optional SUMMARY_INSTRUCTIONS secret (your own wishes for the summaries)."""
+    extra = os.environ.get("SUMMARY_INSTRUCTIONS", "").strip()
+    return instructions + (f"\n{prompt('extra')} {extra}" if extra else "")
+
+
 def load_local_model(config):
     """Downloads (Hugging Face, GGUF format) and loads the open model with llama.cpp."""
     from huggingface_hub import hf_hub_download  # heavy imports, only when needed
@@ -160,7 +223,7 @@ def ask_local(llm, instructions, text):
     """One request to the local model. The instructions go in the user message:
     some open-model chat templates have no system role."""
     # Small models follow the language of the last words they read: repeat the rule.
-    reminder = f"\n\n(Answer in {language_name()} only.)" if language_name() else ""
+    reminder = f"\n\n{prompt('reminder')}" if prompt("reminder") else ""
     reply = llm.create_chat_completion(
         messages=[{"role": "user", "content": instructions + "\n\n" + text + reminder}],
         temperature=0.2, max_tokens=1200)
@@ -189,11 +252,7 @@ def summarize_local(lines, complete, config):
     deadline = STARTED + (int(deadline) if deadline.isdigit() else 320) * 60
 
     parts = split_parts(lines)
-    note_rule = ("You take notes on one part of the transcript of an audio programme "
-                 "(speech only, between pieces of music). List the topics, guests and "
-                 "notable moments in order, one short line each starting with \"- \" and "
-                 "the time in brackets from the transcript. Only report what is said. "
-                 + language_rule() + " Plain text, at most 12 lines.")
+    note_rule = prompt("notes")
     notes, done = [], 0
     for i, part in enumerate(parts, 1):
         if time.time() > deadline:
@@ -204,10 +263,9 @@ def summarize_local(lines, complete, config):
     if not notes:
         raise RuntimeError("No time left to summarize")
     partial = not complete or done < len(parts)
-    final_rule = (SYSTEM.replace("the transcript of one evening", "notes taken on one evening")
-                  .replace("Write in the same language as the transcript.", language_rule()))
+    final_rule = with_extra(prompt("final"))
     if partial:
-        final_rule += "\nThe notes stop before the end of the recording; say so at the end."
+        final_rule += "\n" + prompt("partial")
     text = ask_local(llm, final_rule, "Notes:\n\n" + "\n".join(notes))
     if not text:
         raise RuntimeError("Empty summary")
@@ -215,18 +273,15 @@ def summarize_local(lines, complete, config):
     return text
 
 
-def summarize(lines, complete):
+def summarize(lines, complete, config):
     """Summary by Claude (streaming: the transcript is long)."""
-    note = "" if complete else ("\n(The transcript stops before the end of the recording; "
-                                "say so at the end of the summary.)")
+    note = "" if complete else "\n\n" + prompt("partial")
     client = anthropic.Anthropic()
-    with client.beta.messages.stream(
-        model=CLAUDE_MODEL,
-        max_tokens=32000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",  # another model takes over if this one declines
+    with client.messages.stream(
+        model=config.get("summary_claude_model", CLAUDE_MODEL),
+        max_tokens=16000,
         output_config={"effort": "medium"},
-        system=SYSTEM.replace("Write in the same language as the transcript.", language_rule()),
+        system=with_extra(prompt("claude")),
         messages=[{"role": "user",
                    "content": "Transcript:\n\n" + "\n".join(lines) + note}],
     ) as stream:
@@ -244,8 +299,12 @@ def summarize(lines, complete):
 def main():
     config = load_config()
     engine = config.get("summary_engine", "local").lower()
-    if engine == "claude" and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        raise SystemExit("ANTHROPIC_API_KEY secret missing")
+    engines = ["claude", "local"] if engine == "both" else [engine]
+    if "claude" in engines and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        if engine == "claude":
+            raise SystemExit("ANTHROPIC_API_KEY secret missing")
+        log("ANTHROPIC_API_KEY secret missing: Claude summary skipped")
+        engines.remove("claude")
     drive = Drive()
     if not drive.configured():
         raise SystemExit("GDRIVE_* secrets missing")
@@ -270,19 +329,38 @@ def main():
     if not lines:
         log("No speech found, nothing to summarize")
         return
-    if engine == "claude":
-        summary = summarize(lines, complete)
-    else:
-        summary = summarize_local(lines, complete, config)
-
-    drive.login()  # the access token expires after one hour
-    drive.set_description(target["id"], summary)
-    title = os.environ.get("PODCAST_TITLE", "").strip() or "Recordings"
-    drive.update_feed(folder_id, title)
-    log("Episode description and podcast feed updated")
     label = target["name"].rsplit(".", 1)[0]
-    if push(summary, title=f"Summary: {label}", tags="memo"):
-        log("Summary pushed to ntfy")
+    title = os.environ.get("PODCAST_TITLE", "").strip() or "Recordings"
+    names = {"claude": "Claude", "local": "Mistral"}
+    summaries, failure = {}, None
+    for name in engines:  # Claude first: it takes a minute, the local model hours
+        try:
+            if name == "claude":
+                summaries[name] = summarize(lines, complete, config)
+            else:
+                summaries[name] = summarize_local(lines, complete, config)
+        except Exception as e:
+            if len(engines) == 1:
+                raise
+            failure = failure or e
+            detail = str(e) if isinstance(e, RuntimeError) else type(e).__name__
+            log(f"{names[name]} summary failed: {detail}")
+            push(f"{names[name]} summary failed: {detail}", title="Summary FAILED",
+                 priority="high", tags="warning")
+            continue
+        # Publish each summary as soon as it is ready (both in the episode description).
+        if len(engines) > 1:
+            text = "\n\n".join(f"{names[n]} :\n{summaries[n]}" for n in engines if n in summaries)
+        else:
+            text = summaries[name]
+        drive.login()  # the access token expires after one hour
+        drive.set_description(target["id"], text)
+        drive.update_feed(folder_id, title)
+        log(f"{names[name]} summary published (episode description and podcast feed)")
+        if push(summaries[name], title=f"Summary ({names[name]}): {label}", tags="memo"):
+            log("Summary pushed to ntfy")
+    if not summaries and failure:
+        raise failure
 
 
 if __name__ == "__main__":

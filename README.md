@@ -24,7 +24,8 @@ format is re-encoded to MP3 at `bitrate_kbps`. Recordings older than
 | `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET`, `GDRIVE_REFRESH_TOKEN` | Google access, see below |
 | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `REPORT_TO` | optional email report |
 | `NTFY_TOPIC` | optional ntfy notifications |
-| `ANTHROPIC_API_KEY` | optional, Claude API key (only with `summary_engine = claude`) |
+| `ANTHROPIC_API_KEY` | optional, Claude API key (`summary_engine = claude` or `both`) |
+| `SUMMARY_INSTRUCTIONS` | optional, your own wishes added to the summary instructions |
 | `TRANSCRIPT_LANGUAGE` | optional, language code of the recordings (default: detected) |
 | `SHOW_END_TOPIC` | optional ntfy topic carrying the end-of-show signal (default: `NTFY_TOPIC`) |
 
@@ -102,8 +103,10 @@ with Whisper on the runner (`whisper_model`, music is skipped) and writes a summ
 with approximate times. By default (`summary_engine = local`) the summary is written
 on the runner by an open model (Mistral NeMo, GGUF, run with llama.cpp): free and
 nothing leaves GitHub and Drive, but slow (notes per part of the transcript, then a
-final summary). With `summary_engine = claude` it is written by Claude (Sonnet 5.5,
-secret `ANTHROPIC_API_KEY`). The summary becomes the episode description in the
+final summary). With `summary_engine = claude` it is written by Claude (`summary_claude_model`,
+Haiku 5.5 by default, secret `ANTHROPIC_API_KEY`); with `both`, Claude writes first
+and the local model second, and the episode description holds both. The optional
+`SUMMARY_INSTRUCTIONS` secret adds your own wishes to the instructions. The summary becomes the episode description in the
 podcast feed and is pushed to ntfy. Transcripts and summaries never appear in the
 public log. A specific recording can be summarized by hand (Actions > "Summary" > "Run
 workflow" with its Drive file id).
