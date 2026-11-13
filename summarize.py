@@ -296,6 +296,32 @@ def summarize(lines, complete, config):
     return text
 
 
+NTFY_LIMIT = 3800  # ntfy turns messages over 4096 bytes into an attachment: stay below
+
+
+def push_parts(text, limit=NTFY_LIMIT):
+    """Splits a text into parts of at most 'limit' UTF-8 bytes, between lines when possible."""
+    parts, current = [], ""
+    for line in text.split("\n"):
+        while len(line.encode("utf-8")) > limit:  # a single very long line: cut it
+            cut = line.encode("utf-8")[:limit].decode("utf-8", "ignore")
+            cut = cut.rsplit(" ", 1)[0] if " " in cut else cut
+            if current:
+                parts.append(current)
+                current = ""
+            parts.append(cut)
+            line = line[len(cut):].lstrip()
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate.encode("utf-8")) > limit:
+            parts.append(current)
+            current = line
+        else:
+            current = candidate
+    if current.strip():
+        parts.append(current)
+    return [p.strip() for p in parts if p.strip()]
+
+
 def main():
     config = load_config()
     engine = config.get("summary_engine", "local").lower()
@@ -357,8 +383,13 @@ def main():
         drive.set_description(target["id"], text)
         drive.update_feed(folder_id, title)
         log(f"{names[name]} summary published (episode description and podcast feed)")
-        if push(summaries[name], title=f"Summary ({names[name]}): {label}", tags="memo"):
-            log("Summary pushed to ntfy")
+        parts = push_parts(summaries[name])
+        sent = 0
+        for i, part in enumerate(parts, 1):
+            suffix = f" ({i}/{len(parts)})" if len(parts) > 1 else ""
+            sent += push(part, title=f"Summary ({names[name]}): {label}{suffix}", tags="memo")
+        if sent:
+            log(f"Summary pushed to ntfy ({sent} notification(s))")
     if not summaries and failure:
         raise failure
 
