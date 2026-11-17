@@ -306,6 +306,30 @@ def details(drive, folder_id, target):
              priority="high", tags="warning")
 
 
+def add_chapters(drive, target, path, start):
+    """Chapters with covers in the MP3 file (chapters.py), then the file is replaced on
+    Drive (same link). Never stops the summary."""
+    if not path.endswith(".mp3") or not start:
+        return
+    try:
+        _, end = extras.name_times(target["name"])
+        tracks = extras.notion_tracks(start, end) if end else None
+        if not tracks:
+            return
+        import chapters
+        count, covers = chapters.write(path, tracks, start)
+        if not count:
+            return
+        drive.login()
+        drive.upload(path, target["name"], None, {"chapters": str(count)}, "audio/mpeg",
+                     replace=target["id"])
+        log(f"{count} chapter(s) written into the file ({covers} with a cover)")
+    except Exception as e:  # a bonus: never stops the summary
+        log(f"Chapters not written ({type(e).__name__})")
+        push(f"Chapters not written ({type(e).__name__})", title="Summary warning",
+             priority="high", tags="warning")
+
+
 def main():
     config = load_config()
     engine = config.get("summary_engine", "local").lower()
@@ -339,6 +363,7 @@ def main():
     # The tracks are all identified by now: list them with the picture and keywords.
     drive.login()
     details(drive, folder_id, target)
+    add_chapters(drive, target, path, start)
     if not lines:
         log("No speech found, nothing to summarize")
         return

@@ -86,6 +86,13 @@ only when something goes wrong), `each_step` (one notification per step) or `end
 - with `NOTION_TOKEN` and `NOTION_HISTORY_DB`, the tracks played during the recording
   (Notion properties `Title`, `Artist`, `Played at`, `Link`), each with its position.
 
+With the Notion secrets, MP3 recordings also get chapters (`chapters.py`, ID3v2.3
+CTOC + CHAP, read by podcast apps) after the transcription: one per track, titled
+"Title — Artist" (Notion `Start time`, else `Played at`; rows with the status
+`Remove` are left out), with the album cover (`Cover URL`, at most 600 x 600 JPEG;
+none for `Excerpt` rows), plus a first chapter at 0 s. The file is replaced on Drive
+(same link).
+
 Clock times in the descriptions (e.g. `[23:30]`) are shown as positions in the file
 (`2:30:00 (23h30)`): podcast apps open the episode there.
 

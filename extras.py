@@ -231,16 +231,18 @@ def _plain(prop):
 
 
 def notion_tracks(start, end):
-    """[(played_at, artist, title, link)] played between start and end, or None if the
-    Notion secrets are not set."""
+    """Tracks played between start and end, in order: dicts with "start" (exact start,
+    "Start time" property, else "Played at"), "artist", "title", "link", "cover" and
+    "status". Rows with the status Remove are left out. None if the secrets are not set."""
     token = os.environ.get("NOTION_TOKEN", "").strip()
     db = os.environ.get("NOTION_HISTORY_DB", "").strip()
     m = re.search(r"[0-9a-fA-F]{32}", db.replace("-", ""))
     if not (token and m):
         return None
     headers = {"Authorization": f"Bearer {token}", "Notion-Version": "2022-06-28"}
+    # "Played at" may be a little later than the exact start: look a bit before.
     body = {"filter": {"and": [
-                {"property": "Played at", "date": {"on_or_after": start.isoformat()}},
+                {"property": "Played at", "date": {"on_or_after": (start - timedelta(minutes=10)).isoformat()}},
                 {"property": "Played at", "date": {"before": end.isoformat()}}]},
             "sorts": [{"property": "Played at", "direction": "ascending"}], "page_size": 100}
     tracks = []
@@ -251,27 +253,35 @@ def notion_tracks(start, end):
         data = r.json()
         for page in data.get("results", []):
             p = page.get("properties") or {}
-            when = ((p.get("Played at") or {}).get("date") or {}).get("start")
             title = _plain(p.get("Title"))
-            if not (when and title):
+            status = ((p.get("Status") or {}).get("select") or {}).get("name", "")
+            played = None
+            for when in (_plain(p.get("Start time")),
+                         ((p.get("Played at") or {}).get("date") or {}).get("start")):
+                try:
+                    played = datetime.fromisoformat(when).astimezone(TZ) if when else None
+                except ValueError:
+                    played = None
+                if played:
+                    break
+            if not (played and title) or status == "Remove" or not start <= played < end:
                 continue
-            try:
-                played = datetime.fromisoformat(when).astimezone(TZ)
-            except ValueError:
-                continue
-            tracks.append((played, _plain(p.get("Artist")), title,
-                           (p.get("Link") or {}).get("url") or ""))
+            tracks.append({"start": played, "artist": _plain(p.get("Artist")), "title": title,
+                           "link": (p.get("Link") or {}).get("url") or "",
+                           "cover": (p.get("Cover URL") or {}).get("url") or "",
+                           "status": status})
         if not data.get("has_more"):
-            return tracks
+            return sorted(tracks, key=lambda t: t["start"])
         body["start_cursor"] = data.get("next_cursor")
 
 
 def track_lines(tracks, start):
     lines = []
-    for played, artist, title, link in tracks:
-        offset = max((played - start).total_seconds(), 0)
-        line = f"{clock(offset)} ({played:%Hh%M}) " + (f"{artist} – {title}" if artist else title)
-        lines.append(line + (f" · {link}" if link else ""))
+    for t in tracks:
+        offset = max((t["start"] - start).total_seconds(), 0)
+        line = (f"{clock(offset)} ({t['start']:%Hh%M}) "
+                + (f"{t['artist']} – {t['title']}" if t["artist"] else t["title"]))
+        lines.append(line + (f" · {t['link']}" if t["link"] else ""))
     return "\n".join(lines)
 
 

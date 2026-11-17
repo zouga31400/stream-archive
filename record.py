@@ -710,14 +710,20 @@ class Drive:
                            headers=self.headers(), timeout=30)
         r.raise_for_status()
 
-    def upload(self, path, name, folder_id, properties=None, mime="audio/mpeg"):
+    def upload(self, path, name, folder_id, properties=None, mime="audio/mpeg", replace=None):
+        """Uploads a new file, or new content for the file 'replace' (same id and link)."""
         size = os.path.getsize(path)
-        r = requests.post(DRIVE_UPLOAD, params={"uploadType": "resumable"},
-                          json={"name": name, "parents": [folder_id],
-                                "appProperties": properties or {}},
-                          headers=self.headers(**{"X-Upload-Content-Type": mime,
-                                                  "X-Upload-Content-Length": str(size)}),
-                          timeout=30)
+        headers = self.headers(**{"X-Upload-Content-Type": mime,
+                                  "X-Upload-Content-Length": str(size)})
+        if replace:
+            r = requests.patch(f"{DRIVE_UPLOAD}/{replace}", params={"uploadType": "resumable"},
+                               json={"appProperties": properties or {}}, headers=headers,
+                               timeout=30)
+        else:
+            r = requests.post(DRIVE_UPLOAD, params={"uploadType": "resumable"},
+                              json={"name": name, "parents": [folder_id],
+                                    "appProperties": properties or {}},
+                              headers=headers, timeout=30)
         r.raise_for_status()
         session = r.headers["Location"]
         sent, errors = 0, 0
