@@ -17,8 +17,12 @@ GitHub secrets used:
   REPORT_TO             optional: report recipient (defaults to GMAIL_ADDRESS)
   NTFY_TOPIC            optional: ntfy topic for a push notification
   SHOW_END_TOPIC        optional: ntfy topic carrying the end-of-show signal (default: NTFY_TOPIC)
+  SHOW_PAGE_URL         optional: web page with the picture and keywords of each show (extras.py)
+  NOTION_TOKEN          optional: Notion token, to list the tracks played (extras.py)
+  NOTION_HISTORY_DB     optional: ID of the Notion database of the tracks played
 Non-secret settings: settings.txt.
 """
+import base64
 import glob
 import json
 import os
@@ -63,36 +67,55 @@ CURRENT_NAME = re.compile(r"^(.+) (\d{2})/(\d{2})/(\d{2}) (\d{2}):(\d{2})-(\d{2}
 def name_prefix():
     return os.environ.get("PODCAST_TITLE", "").strip().replace("/", "-") or "Recording"
 SHOW_END_PATTERN = re.compile(r"show-ended\s+(\S+)\s+ends-at\s+(\S+)")
-PUSH_EACH_STEP = False  # set from settings.txt (push_each_step)
+# ntfy notifications (settings.txt, ntfy_notifications): "errors" = only when something
+# goes wrong, "each_step" = one per step in real time, "end" = one summary at the end.
+NOTIFY = "errors"
+WARNINGS = []  # problems that did not stop the run (pushed at the end in "errors" mode)
 PUSH_REPEAT_SECONDS = 600  # the same message is pushed at most once per 10 minutes
 _last_push = {}
 
 
-def push(text, title="Recording", priority="default", tags="headphones"):
-    """Sends one ntfy notification. Never raises; returns True if sent."""
+def header_text(text):
+    """HTTP headers only take Latin-1: other characters are sent encoded (RFC 2047,
+    understood by ntfy)."""
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return "=?UTF-8?B?" + base64.b64encode(text.encode("utf-8")).decode("ascii") + "?="
+
+
+def push(text, title="Recording", priority="default", tags="headphones", attach=""):
+    """Sends one ntfy notification ('attach': picture URL shown with it).
+    Never raises; returns True if sent."""
     topic = os.environ.get("NTFY_TOPIC", "").strip()
     if not topic:
         return False
+    headers = {"Title": header_text(title), "Priority": priority, "Tags": tags}
+    if attach:
+        headers["Attach"] = attach
     try:
         r = requests.post(f"https://ntfy.sh/{topic}", data=text.encode("utf-8"),
-                          headers={"Title": title, "Priority": priority, "Tags": tags},
-                          timeout=15)
+                          headers=headers, timeout=15)
         r.raise_for_status()
         return True
     except requests.RequestException:
         return False
 
 
-def log(*args, private=None, alert=False, quiet=False):
+def log(*args, private=None, alert=False, quiet=False, warn=False):
     """Public message in the GitHub log (the repository is public: no times, no
-    names); 'private' is the detailed version sent by email and ntfy only."""
+    names); 'private' is the detailed version sent by email and ntfy only.
+    'warn': a problem that does not stop the run (notified in "errors" mode too)."""
     message = " ".join(map(str, args))
     print(message, flush=True)
     if private:
         message = private
     line = f"{datetime.now(TZ):%d/%m %H:%M:%S} {message}"  # private: email and ntfy
     LOG_LINES.append(line)
-    if PUSH_EACH_STEP:
+    if warn:
+        WARNINGS.append(line)
+    if NOTIFY == "each_step":
         now = time.time()
         if now - _last_push.get(message, 0) >= PUSH_REPEAT_SECONDS:
             _last_push[message] = now
@@ -104,17 +127,27 @@ def log(*args, private=None, alert=False, quiet=False):
                 push(line)
 
 
+def notify_mode(config):
+    """ntfy_notifications setting; the older push_each_step = yes / no still works."""
+    mode = config.get("ntfy_notifications", "").strip().lower().replace("-", "_")
+    if not mode and "push_each_step" in config:
+        mode = "each_step" if config["push_each_step"].lower() in ("yes", "true", "1", "on") else "end"
+    return mode if mode in ("errors", "each_step", "end") else "errors"
+
+
 def send_push(ok):
-    """End-of-run summary through ntfy (only when steps are not pushed live)."""
+    """End-of-run notification: the whole log in "end" mode; in "errors" mode, only
+    after a failure or a warning. Nothing in "each_step" mode (already sent live)."""
     topic = os.environ.get("NTFY_TOPIC", "").strip()
-    if not topic or PUSH_EACH_STEP:
+    if not topic or NOTIFY == "each_step" or (NOTIFY == "errors" and ok and not WARNINGS):
         return
+    title = f"Recording {'OK' if ok else 'FAILED'}" + (" with warnings" if ok and WARNINGS else "")
     try:
         r = requests.post(f"https://ntfy.sh/{topic}",
-                          data="\n".join(LOG_LINES).encode("utf-8"),
-                          headers={"Title": f"Recording {'OK' if ok else 'FAILED'}",
-                                   "Priority": "default" if ok else "high",
-                                   "Tags": "headphones" if ok else "warning"},
+                          data="\n".join(LOG_LINES).encode("utf-8")[-3800:].decode("utf-8", "ignore").encode("utf-8"),
+                          headers={"Title": title,
+                                   "Priority": "default" if ok and not WARNINGS else "high",
+                                   "Tags": "headphones" if ok and not WARNINGS else "warning"},
                           timeout=30)
         r.raise_for_status()
         print("Push notification sent", flush=True)
@@ -409,11 +442,15 @@ def cut(path, position):
     os.replace(tmp, path)
 
 
-def show_notes(text):
-    """Episode description for podcast apps: plain text plus an HTML version."""
+def show_notes(text, start=None):
+    """Episode description for podcast apps: plain text plus an HTML version. Clock
+    times become positions in the file (H:MM:SS links in podcast apps)."""
     if not text:
         return ""
-    paragraphs = [escape(p).replace("\n", "<br/>") for p in text.strip().split("\n\n")]
+    import extras  # imports this module
+    text = extras.positions(text, start)
+    paragraphs = [extras.linkify(escape(p)).replace("\n", "<br/>")
+                  for p in text.strip().split("\n\n")]
     html = "".join(f"<p>{p}</p>" for p in paragraphs).replace("]]>", "]]&gt;")
     return (f"<description>{escape(text.strip())}</description>"
             f"<itunes:summary>{escape(text.strip())}</itunes:summary>"
@@ -511,7 +548,8 @@ class Drive:
         The drive.file scope limits access to the files created by this script.
         """
         limit = (datetime.now(TZ) - timedelta(days=days)).astimezone(ZoneInfo("UTC"))
-        q = (f"'{folder_id}' in parents and (mimeType = 'audio/mpeg' or mimeType = 'audio/mp4') and trashed = false "
+        q = (f"'{folder_id}' in parents and (mimeType = 'audio/mpeg' or mimeType = 'audio/mp4' "
+             "or mimeType contains 'image/') and trashed = false "
              f"and createdTime < '{limit:%Y-%m-%dT%H:%M:%S}'")
         old, page = [], None
         while True:
@@ -582,6 +620,7 @@ class Drive:
 
     def update_feed(self, folder_id, title):
         """Rebuilds the podcast feed (feed.xml in the folder) and returns its URL."""
+        import extras  # imports this module
         items = []
         for f in self.list_audio(folder_id):
             props = f.get("appProperties") or {}
@@ -597,7 +636,8 @@ class Drive:
                 f"<enclosure url=\"{escape(download_url(f['id']))}\" length=\"{f.get('size', 0)}\" "
                 f"type=\"{escape(f.get('mimeType', 'audio/mpeg'))}\"/>"
                 + (f"<itunes:duration>{escape(duration)}</itunes:duration>" if duration else "")
-                + show_notes(f.get("description", ""))
+                + extras.item_image(f)
+                + show_notes(f.get("description", ""), extras.file_start(f))
                 + "</item>")
         xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
                '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" '
@@ -636,6 +676,33 @@ class Drive:
             with open(path, "wb") as f:
                 for chunk in r.iter_content(CHUNK):
                     f.write(chunk)
+
+    def get(self, file_id):
+        r = requests.get(f"{DRIVE_FILES}/{file_id}",
+                         params={"fields": "id, name, description, appProperties"},
+                         headers=self.headers(), timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    def update_file(self, file_id, description=None, properties=None):
+        body = {}
+        if description is not None:
+            body["description"] = description
+        if properties:
+            body["appProperties"] = properties  # merged with the existing ones
+        if body:
+            r = requests.patch(f"{DRIVE_FILES}/{file_id}", json=body,
+                               headers=self.headers(), timeout=30)
+            r.raise_for_status()
+
+    def upload_bytes(self, data, name, folder_id, mime):
+        meta = {"name": name, "parents": [folder_id]}
+        r = requests.post(DRIVE_UPLOAD, params={"uploadType": "multipart"},
+                          files={"metadata": (None, json.dumps(meta), "application/json"),
+                                 "file": (name, data, mime)},
+                          headers=self.headers(), timeout=60)
+        r.raise_for_status()
+        return r.json()["id"]
 
     def set_description(self, file_id, text):
         """Stores the episode summary in the Drive file's description (used by the feed)."""
@@ -691,10 +758,24 @@ class Drive:
         raise RuntimeError("Upload to Google Drive incomplete")
 
 
+def catch_up(drive, folder_id, config, rebuild=True):
+    """Picture, keywords and tracks of the recent episodes that still miss them
+    (often online only the next day). Never stops the recording."""
+    import extras  # imports this module
+    try:
+        changed = extras.refresh(drive, folder_id, log=log)
+        if changed and rebuild and config.get("podcast_feed", "no").lower() in (
+                "yes", "true", "1", "on"):
+            drive.update_feed(folder_id, os.environ.get("PODCAST_TITLE", "").strip() or "Recordings")
+            log("Podcast feed updated (episode details)")
+    except Exception as e:  # extras are a bonus: report and go on
+        log(f"Episode details not updated ({type(e).__name__})", warn=True)
+
+
 def main():
-    global PUSH_EACH_STEP
+    global NOTIFY
     config = load_config()
-    PUSH_EACH_STEP = config.get("push_each_step", "no").lower() in ("yes", "true", "1", "on")
+    NOTIFY = notify_mode(config)
     log("Job started")
     stream_url = os.environ.get("STREAM_URL", "").strip()
     if not stream_url:
@@ -731,7 +812,7 @@ def main():
         if renamed:
             log(f"{renamed} recording(s) renamed to the current name format")
     except requests.RequestException as e:
-        log(f"Could not rename old recordings ({type(e).__name__}), continuing")
+        log(f"Could not rename old recordings ({type(e).__name__}), continuing", warn=True)
     keep = config.get("retention_days", "14")
     if keep.isdigit() and int(keep) > 0:
         try:
@@ -739,7 +820,9 @@ def main():
         except requests.RequestException as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             log(f"Could not clean up old recordings ({type(e).__name__}"
-                + (f" HTTP {code}" if code else "") + "), continuing")
+                + (f" HTTP {code}" if code else "") + "), continuing", warn=True)
+
+    catch_up(drive, folder_id, config)
 
     bitrate = config.get("bitrate_kbps", "128")
     bitrate = bitrate if bitrate.isdigit() and 32 <= int(bitrate) <= 320 else "128"
@@ -789,9 +872,12 @@ def main():
 
     duration = audio_duration(output)
     drive.login()  # the access token expires after one hour
-    file_id = drive.upload(output, name, folder_id, {"duration": duration} if duration else None,
-                           fmt["mime"])
+    properties = {"start": segments[0][1].isoformat(timespec="seconds")}
+    if duration:
+        properties["duration"] = duration
+    file_id = drive.upload(output, name, folder_id, properties, fmt["mime"])
     log("Uploaded to Google Drive" if file_id else "Upload finished")
+    catch_up(drive, folder_id, config, rebuild=False)  # the feed is rebuilt just below
 
     if config.get("podcast_feed", "no").lower() in ("yes", "true", "1", "on"):
         try:
@@ -802,7 +888,7 @@ def main():
         except requests.RequestException as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             log(f"Podcast feed update failed ({type(e).__name__}"
-                + (f" HTTP {code}" if code else "") + ")")
+                + (f" HTTP {code}" if code else "") + ")", warn=True)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,9 @@ jobs:
       GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
       GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      SHOW_PAGE_URL: ${{ secrets.SHOW_PAGE_URL }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_HISTORY_DB: ${{ secrets.NOTION_HISTORY_DB }}
       SUMMARY_FILE_ID: ${{ github.event.inputs.file_id }}
       SUMMARY_REDO: ${{ github.event.inputs.redo }}
     steps:

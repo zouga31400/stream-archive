@@ -28,6 +28,8 @@ format is re-encoded to MP3 at `bitrate_kbps`. Recordings older than
 | `SUMMARY_INSTRUCTIONS` | optional, your own wishes added to the summary instructions |
 | `TRANSCRIPT_LANGUAGE` | optional, language code of the recordings (default: detected) |
 | `SHOW_END_TOPIC` | optional ntfy topic carrying the end-of-show signal (default: `NTFY_TOPIC`) |
+| `SHOW_PAGE_URL` | optional, web page with the picture and keywords of each show |
+| `NOTION_TOKEN`, `NOTION_HISTORY_DB` | optional, Notion token and database of the tracks played |
 
 ## Starting the recording
 
@@ -67,8 +69,25 @@ https://myaccount.google.com/apppasswords and set `GMAIL_ADDRESS` and
 ## Push notifications (optional)
 
 Install the ntfy app, subscribe to a long, hard-to-guess topic and set it in
-`NTFY_TOPIC`. `push_each_step` in `settings.txt` chooses one notification per
-step or a single summary.
+`NTFY_TOPIC`. `ntfy_notifications` in `settings.txt` chooses: `errors` (default,
+only when something goes wrong), `each_step` (one notification per step) or `end`
+(a single summary). Summaries, track lists, pictures and keywords are always sent.
+
+## Episode details (optional)
+
+`extras.py` completes the descriptions of the recent episodes, at each recording
+(for the previous days) and after each transcription:
+
+- with `SHOW_PAGE_URL`, a public page listing the recent shows (one section per show,
+  under a heading giving its date): the section's first picture becomes the episode
+  artwork (copied to the Drive folder) and its comma-separated keywords open the
+  description; both are pushed to ntfy once. Sections often go online the next day:
+  they are looked for during 3 days.
+- with `NOTION_TOKEN` and `NOTION_HISTORY_DB`, the tracks played during the recording
+  (Notion properties `Title`, `Artist`, `Played at`, `Link`), each with its position.
+
+Clock times in the descriptions (e.g. `[23:30]`) are shown as positions in the file
+(`2:30:00 (23h30)`): podcast apps open the episode there.
 
 ## End-of-show signal (optional)
 

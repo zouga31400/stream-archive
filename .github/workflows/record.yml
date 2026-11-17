@@ -35,6 +35,9 @@ jobs:
       REPORT_TO: ${{ secrets.REPORT_TO }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       SHOW_END_TOPIC: ${{ secrets.SHOW_END_TOPIC }}
+      SHOW_PAGE_URL: ${{ secrets.SHOW_PAGE_URL }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_HISTORY_DB: ${{ secrets.NOTION_HISTORY_DB }}
       TEST_MINUTES: ${{ github.event.inputs.minutes }}
     steps:
       - uses: actions/checkout@v5

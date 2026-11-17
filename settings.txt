@@ -6,9 +6,10 @@ stream_copy = yes
 bitrate_kbps = 128
 # Recordings permanently deleted after this many days (0 = never).
 retention_days = 14
-# ntfy notifications (secret NTFY_TOPIC): "yes" = one notification per step, in real
-# time; "no" = a single summary at the end.
-push_each_step = yes
+# ntfy notifications (secret NTFY_TOPIC): "errors" = only when something goes wrong;
+# "each_step" = one notification per step, in real time; "end" = a single summary at the
+# end of each recording. Summaries, track lists, pictures and keywords are always sent.
+ntfy_notifications = errors
 # Private podcast feed (feed.xml in the Drive folder; its link is sent by email only).
 # "yes" shares each recording with anyone who has its link (needed by podcast apps).
 podcast_feed = yes

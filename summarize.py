@@ -7,6 +7,7 @@ summaries never appear in the public log.
 GitHub secrets used (besides the Drive ones of record.py):
   TRANSCRIPT_LANGUAGE   optional: language code of the recordings, e.g. en (default: detected)
   ANTHROPIC_API_KEY     only with summary_engine = claude
+Episode details (picture, keywords, tracks): see extras.py.
 Settings (settings.txt): whisper_model, whisper_beam_size, summary_min_minutes,
 transcription_max_minutes, summary_engine, summary_model_repo, summary_model_file,
 summary_context_tokens, summary_deadline_minutes.
@@ -15,13 +16,15 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import anthropic
 import requests
 
+import extras
 import record
-from record import CURRENT_NAME, TZ, Drive, load_config, name_prefix, push
+from extras import push_parts
+from record import Drive, load_config, push
 
 WORK_DIR = os.path.join(record.HERE, "summary")
 STARTED = time.time()
@@ -57,16 +60,7 @@ def minutes(duration):
         return 0
 
 
-def recording_start(name):
-    """Start time from a name like '<prefix> 25/12/26 18:00-23:30.mp3', or None."""
-    m = CURRENT_NAME.match(name)
-    if not m:
-        return None
-    _, d, mo, yy, h1, m1 = m.groups()[:6]
-    return datetime(2000 + int(yy), int(mo), int(d), int(h1), int(m1), tzinfo=TZ)
-
-
-def pick(files, min_minutes, wanted=""):
+def pick(files, min_minutes, wanted="", redo=False):
     """The file to summarize: the one named in 'wanted' (id), else the newest
     recording long enough that has no summary yet."""
     for f in files:
@@ -78,7 +72,7 @@ def pick(files, min_minutes, wanted=""):
         length = minutes((f.get("appProperties") or {}).get("duration"))
         if not length:  # older uploads have no duration: estimate it from the size
             length = int(f.get("size") or 0) / (64_000 / 8) / 60  # at 64 kb/s at least
-        if length >= min_minutes and not f.get("description"):
+        if length >= min_minutes and (redo or not extras.has_summary(f.get("description"))):
             return f
     return None
 
@@ -296,30 +290,20 @@ def summarize(lines, complete, config):
     return text
 
 
-NTFY_LIMIT = 3800  # ntfy turns messages over 4096 bytes into an attachment: stay below
-
-
-def push_parts(text, limit=NTFY_LIMIT):
-    """Splits a text into parts of at most 'limit' UTF-8 bytes, between lines when possible."""
-    parts, current = [], ""
-    for line in text.split("\n"):
-        while len(line.encode("utf-8")) > limit:  # a single very long line: cut it
-            cut = line.encode("utf-8")[:limit].decode("utf-8", "ignore")
-            cut = cut.rsplit(" ", 1)[0] if " " in cut else cut
-            if current:
-                parts.append(current)
-                current = ""
-            parts.append(cut)
-            line = line[len(cut):].lstrip()
-        candidate = f"{current}\n{line}" if current else line
-        if len(candidate.encode("utf-8")) > limit:
-            parts.append(current)
-            current = line
-        else:
-            current = candidate
-    if current.strip():
-        parts.append(current)
-    return [p.strip() for p in parts if p.strip()]
+def details(drive, folder_id, target):
+    """Picture, keywords and track list of the recent episodes (see extras.py);
+    the track list of the summarized recording is also pushed to ntfy."""
+    try:
+        files = drive.list_audio(folder_id)
+        if extras.refresh(drive, folder_id, files, log=log, notify_tracks=True):
+            drive.update_feed(folder_id, os.environ.get("PODCAST_TITLE", "").strip() or "Recordings")
+            log("Podcast feed updated (episode details)")
+        if target:  # keep the description just written
+            target.update(next((f for f in files if f["id"] == target["id"]), {}))
+    except Exception as e:  # a bonus: never stops the summary
+        log(f"Episode details not updated ({type(e).__name__})")
+        push(f"Episode details not updated ({type(e).__name__})", title="Summary warning",
+             priority="high", tags="warning")
 
 
 def main():
@@ -339,19 +323,22 @@ def main():
     min_minutes = config.get("summary_min_minutes", "10")
     min_minutes = int(min_minutes) if min_minutes.isdigit() else 10
     files = drive.list_audio(folder_id)
-    if os.environ.get("SUMMARY_REDO", "").strip().lower() in ("yes", "true", "1"):
-        for f in files:  # summarize again: ignore the existing summaries
-            f.pop("description", None)
-    target = pick(files, min_minutes, os.environ.get("SUMMARY_FILE_ID", "").strip())
+    redo = os.environ.get("SUMMARY_REDO", "").strip().lower() in ("yes", "true", "1")
+    target = pick(files, min_minutes, os.environ.get("SUMMARY_FILE_ID", "").strip(), redo)
     if not target:
         log("No recording to summarize")
+        details(drive, folder_id, None)
         return
     log("Recording found, downloading")
     os.makedirs(WORK_DIR, exist_ok=True)
     path = os.path.join(WORK_DIR, "audio" + os.path.splitext(target["name"])[1])
     drive.download(target["id"], path)
 
-    lines, complete, _ = transcribe(path, recording_start(target["name"]), config)
+    start = extras.file_start(target)
+    lines, complete, _ = transcribe(path, start, config)
+    # The tracks are all identified by now: list them with the picture and keywords.
+    drive.login()
+    details(drive, folder_id, target)
     if not lines:
         log("No speech found, nothing to summarize")
         return
@@ -374,16 +361,18 @@ def main():
             push(f"{names[name]} summary failed: {detail}", title="Summary FAILED",
                  priority="high", tags="warning")
             continue
-        # Publish each summary as soon as it is ready (both in the episode description).
-        if len(engines) > 1:
-            text = "\n\n".join(f"{names[n]} :\n{summaries[n]}" for n in engines if n in summaries)
-        else:
-            text = summaries[name]
+        # Publish each summary as soon as it is ready, keeping the other sections of the
+        # description (keywords, track list, the other summary).
         drive.login()  # the access token expires after one hour
-        drive.set_description(target["id"], text)
+        sections = extras.parse(drive.get(target["id"]).get("description", ""))
+        if redo and name == engines[0]:  # summarized again: drop the older summaries
+            for key in ("claude", "local", "summary"):
+                sections.pop(key, None)
+        sections[name] = summaries[name]
+        drive.set_description(target["id"], extras.compose(sections))
         drive.update_feed(folder_id, title)
         log(f"{names[name]} summary published (episode description and podcast feed)")
-        parts = push_parts(summaries[name])
+        parts = push_parts(extras.positions(summaries[name], start))
         sent = 0
         for i, part in enumerate(parts, 1):
             suffix = f" ({i}/{len(parts)})" if len(parts) > 1 else ""
