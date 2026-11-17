@@ -363,7 +363,7 @@ def refresh(drive, folder_id, files=None, log=print, notify_tracks=False):
             parts = push_parts(text)
             for i, part in enumerate(parts, 1):
                 suffix = f" ({i}/{len(parts)})" if len(parts) > 1 else ""
-                push(part, title=title + suffix, tags="radio" if attach else "notes",
+                push(part, title=title + suffix, tags="framed_picture" if attach else "notes",
                      attach=attach if i == 1 else "")
     return changed
 
