@@ -790,6 +790,7 @@ def main():
         folder_id = drive.folder(os.environ.get("DRIVE_FOLDER", "").strip() or "Recordings")
         renamed = drive.rename_old(folder_id, name_prefix())
         log(f"{renamed} recording(s) renamed")
+        catch_up(drive, folder_id, config, rebuild=False)  # the feed is rebuilt just below
         title = os.environ.get("PODCAST_TITLE", "").strip() or "Recordings"
         feed_url, count = drive.update_feed(folder_id, title)
         log("Podcast feed updated", private=f"Podcast feed updated ({count} episode(s))")
