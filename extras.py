@@ -28,16 +28,17 @@ TRACKS_DELAY = timedelta(minutes=10)  # after the end of the recording
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 
 # Description sections, in display order. Headers are read in both languages.
-SECTIONS = ("keywords", "claude", "local", "summary", "tracks")
+SECTIONS = ("keywords", "summary", "local", "tracks")  # the Claude summary is "summary"
 LABELS = {
-    "fr": {"keywords": "Mots-clés", "claude": "Claude", "local": "Mistral",
+    "fr": {"keywords": "Mots-clés", "local": "Mistral",
            "summary": "Résumé", "tracks": "Titres diffusés"},
-    "en": {"keywords": "Keywords", "claude": "Claude", "local": "Mistral",
+    "en": {"keywords": "Keywords", "local": "Mistral",
            "summary": "Summary", "tracks": "Tracks played"},
 }
 HEADER = re.compile(r"^(Mots-clés|Keywords|Claude|Mistral|Résumé|Summary|Titres diffusés|"
                     r"Tracks played) ?:$")
 HEADER_KEYS = {label: key for labels in LABELS.values() for key, label in labels.items()}
+HEADER_KEYS["Claude"] = "summary"  # older descriptions labelled the Claude summary
 
 MONTHS = {"janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5,
           "juin": 6, "juillet": 7, "août": 8, "aout": 8, "septembre": 9, "octobre": 10,
@@ -78,7 +79,13 @@ def compose(sections):
 
 
 def has_summary(description):
-    return any(k in parse(description) for k in ("claude", "local", "summary"))
+    return any(k in parse(description) for k in ("local", "summary"))
+
+
+def unlabel(text):
+    """Older descriptions open the Claude summary with "Claude :": now just "Résumé :"."""
+    names = labels()
+    return re.sub(r"(?m)^Claude ?:$", names["summary"] + (" :" if names is LABELS["fr"] else ":"), text or "")
 
 
 def clock(seconds):

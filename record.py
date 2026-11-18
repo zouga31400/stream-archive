@@ -448,7 +448,7 @@ def show_notes(text, start=None):
     if not text:
         return ""
     import extras  # imports this module
-    text = extras.positions(text, start)
+    text = extras.positions(extras.unlabel(text), start)
     paragraphs = [extras.linkify(escape(p)).replace("\n", "<br/>")
                   for p in text.strip().split("\n\n")]
     html = "".join(f"<p>{p}</p>" for p in paragraphs).replace("]]>", "]]&gt;")

@@ -391,9 +391,11 @@ def main():
         drive.login()  # the access token expires after one hour
         sections = extras.parse(drive.get(target["id"]).get("description", ""))
         if redo and name == engines[0]:  # summarized again: drop the older summaries
-            for key in ("claude", "local", "summary"):
+            for key in ("local", "summary"):
                 sections.pop(key, None)
-        sections[name] = summaries[name]
+        # Claude's summary is the main one ("Résumé"); the local model's is labelled
+        # "Mistral" when both are there.
+        sections["local" if name == "local" and len(engines) > 1 else "summary"] = summaries[name]
         drive.set_description(target["id"], extras.compose(sections))
         drive.update_feed(folder_id, title)
         log(f"{names[name]} summary published (episode description and podcast feed)")
