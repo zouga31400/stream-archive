@@ -177,6 +177,31 @@ def send_report(ok):
         print(f"Report email failed ({type(e).__name__})", flush=True)
 
 
+def cover_tags(config=None, title=""):
+    """Channel artwork of the podcast feed: the Drive file id in settings.txt (podcast_image),
+    shared with anyone who has the link. Empty when not set."""
+    file_id = ((config if config is not None else load_config()).get("podcast_image") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{10,}", file_id):
+        return ""
+    url = escape(download_url(file_id) + "&f=cover.jpg")
+    return (f'<itunes:image href="{url}"/><image><url>{url}</url><title>{escape(title)}</title>'
+            '<link>https://drive.google.com/</link></image>')
+
+
+def check_cover(config=None):
+    """True/False: the cover can be downloaded without signing in (None: no cover set)."""
+    file_id = ((config if config is not None else load_config()).get("podcast_image") or "").strip()
+    if not file_id:
+        return None
+    try:
+        r = requests.get(download_url(file_id) + "&f=cover.jpg", timeout=30, stream=True)
+        ok = r.status_code == 200 and r.headers.get("content-type", "").startswith("image/")
+        r.close()
+        return ok
+    except requests.RequestException:
+        return False
+
+
 def load_config():
     config = {}
     try:
@@ -644,7 +669,7 @@ class Drive:
                'xmlns:content="http://purl.org/rss/1.0/modules/content/">'
                f"<channel><title>{escape(title)}</title><description>{escape(title)}</description>"
                "<link>https://drive.google.com/</link><itunes:block>Yes</itunes:block>"
-               f"{''.join(items)}</channel></rss>\n").encode("utf-8")
+               f"{cover_tags(title=title)}{''.join(items)}</channel></rss>\n").encode("utf-8")
 
         q = f"'{folder_id}' in parents and name = '{FEED_NAME}' and trashed = false"
         r = requests.get(DRIVE_FILES, params={"q": q, "fields": "files(id)"},
@@ -800,6 +825,10 @@ def main():
         title = os.environ.get("PODCAST_TITLE", "").strip() or "Recordings"
         feed_url, count = drive.update_feed(folder_id, title)
         log("Podcast feed updated", private=f"Podcast feed updated ({count} episode(s))")
+        cover = check_cover()
+        if cover is not None:
+            log("Podcast cover reachable" if cover else "Podcast cover NOT reachable (check its sharing)",
+                warn=not cover)
         EMAIL_ONLY.append(f"Podcast feed (keep it private): {feed_url}")
         return
 

@@ -73,6 +73,13 @@ Install the ntfy app, subscribe to a long, hard-to-guess topic and set it in
 only when something goes wrong), `each_step` (one notification per step) or `end`
 (a single summary). Summaries, track lists, pictures and keywords are always sent.
 
+## Podcast artwork (optional)
+
+`podcast_image` in `settings.txt` is the Drive id of a square picture (JPEG or PNG, 1400 to
+3000 px) shared with anyone who has the link. It becomes the artwork of the whole podcast in
+the feed; episodes with their own picture keep it. A maintenance run ("feed") logs whether
+the picture is reachable.
+
 ## Episode details (optional)
 
 `extras.py` completes the descriptions of the recent episodes, at each recording
