@@ -15,7 +15,7 @@ ntfy_notifications = errors
 podcast_feed = yes
 # Podcast artwork: id of a square JPEG or PNG (1400 to 3000 px) on Drive, shared with
 # anyone who has the link. Empty = no artwork (episodes keep their own pictures).
-podcast_image = 1mblahr0Uidli3Z8VHX2bPHiX4g2PM6P1
+podcast_image = 1Q3rjKovqV-SD059xBfbbpPbwh7MEgRDL
 # End-of-show signal (ntfy, tag show_end): the file is cut this many seconds after the
 # estimated end, to make up for the stream's delay (0 = cut exactly at the estimate).
 show_end_margin_seconds = 30
