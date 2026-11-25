@@ -317,7 +317,7 @@ def add_chapters(drive, target, path, start):
         if not tracks:
             return
         import chapters
-        count, covers = chapters.write(path, tracks, start)
+        count, covers = chapters.write(path, tracks, start, extras.lead_seconds())
         if not count:
             return
         drive.login()

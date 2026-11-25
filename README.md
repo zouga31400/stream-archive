@@ -100,6 +100,9 @@ CTOC + CHAP, read by podcast apps) after the transcription: one per track, title
 none for `Excerpt` rows), plus a first chapter at 0 s. The file is replaced on Drive
 (same link).
 
+Each chapter starts `chapter_lead_seconds` (settings.txt) before the detected start of its
+track, because that start is an estimate that tends to be a little late.
+
 Clock times in the descriptions (e.g. `[23:30]`) are shown as positions in the file
 (`2:30:00 (23h30)`): podcast apps open the episode there.
 

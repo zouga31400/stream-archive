@@ -37,13 +37,15 @@ def cover_jpeg(url):
         return None
 
 
-def plan(tracks, start, duration_ms):
-    """[(start_ms, end_ms, title, cover_url)] from the tracks, in order, inside the file."""
+def plan(tracks, start, duration_ms, lead_ms=0):
+    """[(start_ms, end_ms, title, cover_url)] from the tracks, in order, inside the file.
+    Each chapter starts `lead_ms` before the detected start of its track."""
     marks = []
     for t in tracks:
         ms = int((t["start"] - start).total_seconds() * 1000)
         if ms < 0 or ms >= duration_ms:
             continue
+        ms = max(ms - lead_ms, 0)
         title = t["title"] + (f" — {t['artist']}" if t["artist"] else "")
         cover = "" if t.get("status") == "Excerpt" else t.get("cover", "")
         if marks and ms <= marks[-1][0]:  # same start as the previous one: keep it apart
@@ -57,13 +59,13 @@ def plan(tracks, start, duration_ms):
             for i, (ms, title, cover) in enumerate(marks)]
 
 
-def write(path, tracks, start):
+def write(path, tracks, start, lead_seconds=0):
     """Writes the chapters into the MP3 file; returns (chapters, covers) written."""
     from mutagen.id3 import APIC, CHAP, CTOC, ID3, TIT2, CTOCFlags, ID3NoHeaderError
     from mutagen.mp3 import MP3
 
     duration_ms = int(MP3(path).info.length * 1000)
-    chapters = plan(tracks, start, duration_ms)
+    chapters = plan(tracks, start, duration_ms, int(lead_seconds * 1000))
     if not chapters:
         return 0, 0
     try:

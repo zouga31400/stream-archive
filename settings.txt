@@ -15,6 +15,9 @@ ntfy_notifications = errors
 podcast_feed = yes
 # Podcast artwork: id of a square JPEG or PNG (1400 to 3000 px) on Drive, shared with
 # anyone who has the link. Empty = no artwork (episodes keep their own pictures).
+# Chapters and track positions: shown this many seconds before the detected start of a track
+# (the detected start is an estimate, usually a little late). 0 = exactly at the detected start.
+chapter_lead_seconds = 10
 podcast_image = 18788lWiv5VyD7HXbW6ORcoZz7ezFp5m3
 # End-of-show signal (ntfy, tag show_end): the file is cut this many seconds after the
 # estimated end, to make up for the stream's delay (0 = cut exactly at the estimate).
