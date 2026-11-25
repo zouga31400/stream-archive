@@ -282,11 +282,12 @@ def notion_tracks(start, end):
         body["start_cursor"] = data.get("next_cursor")
 
 
-def lead_seconds():
-    """How much earlier than the detected start a track is shown (settings.txt,
-    chapter_lead_seconds): the start of a track is an estimate, usually a little late."""
-    value = (record.load_config().get("chapter_lead_seconds") or "").strip()
-    return min(int(value), 300) if value.isdigit() else 10
+def lead_seconds(key="chapter_lead_seconds", default=120):
+    """Seconds taken off the detected start of a track (setting `key` of settings.txt): the cover
+    is shown that much earlier (chapter_lead_seconds), and the position in the description is
+    a little earlier too (position_lead_seconds)."""
+    value = (record.load_config().get(key) or "").strip()
+    return min(int(value), 600) if value.isdigit() else default
 
 
 def track_lines(tracks, start, lead=0):
@@ -368,7 +369,7 @@ def refresh(drive, folder_id, files=None, log=print, notify_tracks=False):
                     + (f" HTTP {code}" if code else "") + ")")
                 tracks = None
             if tracks:
-                text = track_lines(tracks, start, lead_seconds())
+                text = track_lines(tracks, start, lead_seconds("position_lead_seconds", 10))
                 if text != sections.get("tracks"):
                     sections["tracks"] = text
                     update = True
