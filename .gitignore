@@ -6,3 +6,4 @@ summary/
 .venv/
 logs/
 __pycache__/
+.lock-*
